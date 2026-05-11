@@ -1,0 +1,2 @@
+highScore=9002
+totalKills=248
