@@ -68,7 +68,6 @@ ArrayList<SprintTrailPuff> sprintTrailPuffs = new ArrayList<SprintTrailPuff>();
 ArrayList<float[]> sprintTrailScreenDots = new ArrayList<float[]>();
 float sprintTrailEmitAccum = 0;
 ArrayList<AmmoGainFx> ammoGainFx = new ArrayList<AmmoGainFx>();
-
 boolean playerGoreSpawned = false;
 boolean sprintHeld = false;
 float hurtShakePx = 0;
@@ -92,15 +91,46 @@ final float WAVE_BREAK_DURATION = 8.0;
 int currentWave = 1;
 int maxWaves = 5;
 
-PImage texBarrel, texRoof, texGround;
+PImage texBarrel, texRoof, texGround, texCactus;
+/** Optional UI sprites in data/ui/ — game draws text buttons if missing. */
+PImage uiBtnControls, uiBtnControlsHot;
+/** Menu UI — data/ui/ */
+PImage uiWesternBg;
 Clip musicClip;
-float[] starX, starY;
+
+/** Ses seviyesi — sadece burayı değiştir (0.0 = sessiz, 1.0 = tam). */
+final float GAME_SFX_VOLUME = 0.05f;
+final float GAME_MUSIC_VOLUME = 0.05f;
+
+/** WESTERN BOUNTY — harflerden geçen dalga */
+final int TITLE_FONT_SIZE = 62;
+final float TITLE_WAVE_SPEED = 0.0015f;
+final float TITLE_WAVE_SPACING = 0.4f;
+final float TITLE_WAVE_AMP = 6f;
+
+final int MENU_SUBTITLE_SIZE = 24;
+final int MENU_SCORE_SIZE = 20;
+final int MENU_CREDITS_SIZE = 16;
+final int MENU_CLICK_SIZE = 28;
+
+/** Click to play — sadece alpha yanıp sönme (boyut sabit) */
+final float CLICK_BLINK_SPEED = 0.004f;
+final int CLICK_ALPHA_MIN = 100;
+final int CLICK_ALPHA_MAX = 255;
+
 /** Player feet in screen space (for reload bar). */
 float playerScreenFootX, playerScreenFootY;
 /** ~Chest height — sprint bar anchored above character in screen space. */
 float playerSprintHudX, playerSprintHudY;
 /** 0..1: visible while Shift held, fades out after release. */
 float sprintBarFocus = 0;
+
+final int FLOW_TITLE = 0;
+final int FLOW_CONTROLS = 1;
+final int FLOW_PLAY = 2;
+int gameFlow = FLOW_TITLE;
+boolean showControlsOverlay = false;
+float controlsBtnX, controlsBtnY, controlsBtnW = 108, controlsBtnH = 30;
 
 String gameStateText = "";
 boolean finished = false;
@@ -137,21 +167,12 @@ void setup() {
   sphereDetail(18);
   buildSceneColliders();
   loadTextureAssets();
-  initStarfield();
+  loadUiAssets();
+  SoundHelper.sfxVolume = GAME_SFX_VOLUME;
+  SoundHelper.musicVolume = GAME_MUSIC_VOLUME;
   loadProgression();
-  initGame();
-}
-
-void initStarfield() {
-  randomSeed(1337);
-  starX = new float[140];
-  starY = new float[140];
-  int w = max(200, width > 0 ? width : displayWidth);
-  int h = max(200, height > 0 ? height : displayHeight);
-  for (int i = 0; i < starX.length; i++) {
-    starX[i] = random(w * 1.05f);
-    starY[i] = random(h * 1.05f);
-  }
+  gameFlow = FLOW_TITLE;
+  startMenuMusic();
 }
 
 PImage tryLoadImage(String relPath) {
@@ -213,10 +234,71 @@ void loadTextureAssets() {
   texGround = tryLoadImage("textures/ground_dirt.jpg");
   if (texGround == null) texGround = tryLoadImage("textures/ground_dirt.png");
   if (texGround == null) texGround = makeNoiseGroundTexture();
+
+  texCactus = tryLoadImage("textures/cactus.png");
+}
+
+void loadUiAssets() {
+  uiWesternBg = tryLoadImage("ui/western_bg.png");
+  uiBtnControls = tryLoadImage("ui/btn_controls.png");
+  uiBtnControlsHot = tryLoadImage("ui/btn_controls_hot.png");
+  if (uiBtnControlsHot == null) uiBtnControlsHot = uiBtnControls;
+}
+
+/** Draw a UI button image or a simple western-style fallback rect. */
+void drawUiButton(PImage img, PImage imgHot, float x, float y, float w, float h, boolean hot) {
+  rectMode(CORNER);
+  PImage use = hot && imgHot != null ? imgHot : img;
+  if (use != null) {
+    imageMode(CORNER);
+    image(use, x, y, w, h);
+    imageMode(CORNER);
+    return;
+  }
+  noStroke();
+  fill(hot ? 72 : 48, 32, 18, 240);
+  rect(x, y, w, h, 6);
+  stroke(200, 155, 75, hot ? 255 : 200);
+  strokeWeight(1.5);
+  noFill();
+  rect(x + 1, y + 1, w - 2, h - 2, 5);
+  noStroke();
+}
+
+/** Tries each filename under data/sounds/ (WAV and MP3). */
+void playSoundSafe(String... names) {
+  for (String name : names) {
+    File f = new File(dataPath("sounds/" + name));
+    if (f.exists()) {
+      SoundHelper.playSoundFile(f.getAbsolutePath(), SoundHelper.sfxVolume);
+      return;
+    }
+  }
 }
 
 void playWavSafe(String name) {
-  SoundHelper.playWav(dataPath("sounds/" + name));
+  if (name.equals("gun_player.wav")) {
+    playSoundSafe("gun_player.wav");
+    return;
+  }
+  if (name.equals("reload.wav")) {
+    playSoundSafe("gun_reload.wav", "reload.wav");
+    return;
+  }
+  playSoundSafe(name);
+}
+
+/** Loot pickup — reload sesi değil; data/sounds/pickup.wav varsa onu çalar. */
+void playPickupSound() {
+  playSoundSafe("pickup.wav", "loot.wav");
+}
+
+String firstSoundPath(String... names) {
+  for (String name : names) {
+    File f = new File(dataPath("sounds/" + name));
+    if (f.exists()) return f.getAbsolutePath();
+  }
+  return null;
 }
 
 void loadProgression() {
@@ -339,19 +421,18 @@ class AmmoGainFx {
     float u = age / 1.08;
     float a = 255 * (1 - u * u);
     if (a < 5) return;
+    pushStyle();
+    blendMode(BLEND);
     float pulse = age < 0.14 ? (0.72 + 0.28 * sin(age * 55)) : 1;
     float ts = (34 + 12 * pulse) * (1 - u * 0.22);
     textAlign(CENTER, CENTER);
     textSize(ts);
     int core = color(70, 255, 130);
-    int rim = color(200, 255, 220);
     fill(0, a * 0.6);
     text(label, sx + 2.5, sy + 2.5);
-    fill(red(rim), green(rim), blue(rim), a * 0.45);
-    text(label, sx, sy);
     fill(red(core), green(core), blue(core), a);
     text(label, sx, sy - 1);
-    noStroke();
+    popStyle();
   }
 }
 
@@ -396,6 +477,8 @@ class PickupPlusFx {
   void draw2D() {
     float a = 255 * constrain(1 - age / 0.82, 0, 1);
     if (a < 6) return;
+    pushStyle();
+    blendMode(BLEND);
     textAlign(CENTER, CENTER);
     int c = color(255, 224, 105);
     if (kind == 1) c = color(115, 255, 155);
@@ -406,14 +489,8 @@ class PickupPlusFx {
     text("+", sx + 1.5, sy + 2);
     fill(red(c), green(c), blue(c), a);
     text("+", sx, sy);
-    stroke(red(c), green(c), blue(c), a * 0.65);
-    strokeWeight(2.2);
-    float r = 14 * pulse;
-    line(sx - r, sy, sx + r, sy);
-    line(sx, sy - r, sx, sy + r);
     noStroke();
-    fill(255, 255, 250, a * 0.3);
-    ellipse(sx, sy, 9, 9);
+    popStyle();
   }
 }
 
@@ -469,20 +546,68 @@ void updateAndDrawGore(float dt) {
 }
 
 void stopMusic() {
+  SoundHelper.stopMusicLoop();
   SoundHelper.disposeClip(musicClip);
   musicClip = null;
 }
 
-void startMusicIfAny() {
+void startMenuMusic() {
+  if (gameFlow != FLOW_TITLE && gameFlow != FLOW_CONTROLS) return;
   stopMusic();
-  musicClip = SoundHelper.openMusicLoop(dataPath("sounds/music_loop.wav"));
+  String path = firstSoundPath("western_soundtrack.wav", "music_menu.wav");
+  if (path == null) return;
+  musicClip = SoundHelper.openMusicLoop(path, SoundHelper.musicVolume);
 }
 
-void drawStarfield2D() {
-  stroke(255, 70);
-  strokeWeight(1.2);
-  for (int i = 0; i < starX.length; i++) point(starX[i], starY[i]);
+void startMusicIfAny() {
+  stopMusic();
+  String path = firstSoundPath("music_loop.wav", "music_loop.mp3");
+  if (path == null) return;
+  musicClip = SoundHelper.openMusicLoop(path, SoundHelper.musicVolume * 0.85f);
+}
+
+void drawWesternMenuBgImage() {
   noStroke();
+  if (uiWesternBg != null) {
+    imageMode(CORNER);
+    image(uiWesternBg, 0, 0, width, height);
+  } else {
+    background(32, 20, 14);
+  }
+}
+
+/** Title letters with a traveling Mexican-wave bounce. */
+void drawTitleMexicanWave(String title, float cx, float cy, int fontSize) {
+  pushStyle();
+  textSize(fontSize);
+  textAlign(LEFT, CENTER);
+  float totalW = textWidth(title);
+  float x = cx - totalW * 0.5f;
+  float t = millis() * TITLE_WAVE_SPEED;
+  for (int i = 0; i < title.length(); i++) {
+    char ch = title.charAt(i);
+    float lift = sin(t - i * TITLE_WAVE_SPACING) * TITLE_WAVE_AMP;
+    float y = cy + lift;
+    fill(0, 0, 0, 200);
+    text(ch, x + 2, y + 2);
+    fill(255, 242, 175);
+    text(ch, x, y);
+    x += textWidth(ch);
+  }
+  popStyle();
+}
+
+/** High score + credits on title / controls menus. */
+void drawMenuExtras(float centerX) {
+  textAlign(CENTER, CENTER);
+  if (progressionHighScore > 0 || progressionTotalKills > 0) {
+    textSize(MENU_SCORE_SIZE);
+    fill(255, 248, 210);
+    text("★ Best bounty: " + progressionHighScore + "   Outlaws: " + progressionTotalKills, centerX, height * 0.52f);
+  }
+  textSize(MENU_CREDITS_SIZE);
+  fill(245, 235, 210);
+  text("Ozan Halis Demiralp · Yavuzhan Özbek", centerX, height * 0.91f);
 }
 
 void addCollider(float minX, float maxX, float minZ, float maxZ) {
@@ -502,6 +627,7 @@ void buildSceneColliders() {
   addCollider(worldX(450), worldX(590), worldZ(178), worldZ(320));
   addCircleCollider(worldX(-148), worldZ(58), worldX(44));
   addCollider(worldX(632), worldX(808), worldZ(-10), worldZ(70));
+  addCircleCollider(worldX(520), worldZ(250), worldX(62));
 
   float cR = (worldX(26) + worldZ(26)) * 0.5;
   addCircleCollider(worldX(-130), worldZ(-380), cR);
@@ -554,30 +680,269 @@ boolean circleOverlapsColliderXZ(float px, float pz, float r) {
   return false;
 }
 
+boolean isInArenaXZ(float x, float z, float margin) {
+  return x > -arenaHalfW + margin && x < arenaHalfW - margin
+    && z > -arenaHalfH + margin && z < arenaHalfH - margin;
+}
+
+/** True if a bandit-sized circle can stand here. */
+boolean isWalkableSpawnXZ(float x, float z, float r) {
+  return isInArenaXZ(x, z, 80) && !circleOverlapsColliderXZ(x, z, r);
+}
+
+/** Push position out of buildings; spiral search if still inside. */
+void nudgeToClearPosition(PVector pos, float r) {
+  resolveCircleColliders(pos, r, 16);
+  if (!circleOverlapsColliderXZ(pos.x, pos.z, r * 0.9f)) return;
+  float ox = pos.x, oz = pos.z;
+  for (float ring = 35; ring < 320; ring += 32) {
+    for (int i = 0; i < 16; i++) {
+      float a = i * TWO_PI / 16.0f;
+      float tx = ox + cos(a) * ring;
+      float tz = oz + sin(a) * ring;
+      if (isWalkableSpawnXZ(tx, tz, r)) {
+        pos.x = tx;
+        pos.z = tz;
+        return;
+      }
+    }
+  }
+}
+
+/** Steering away from building colliders (smooth avoidance, not only collision). */
+PVector colliderSteerForce(float px, float pz, float radius) {
+  PVector acc = new PVector(0, 0, 0);
+  float pad = radius + 42;
+  for (float[] b : sceneColliders) {
+    if (px > b[0] && px < b[1] && pz > b[2] && pz < b[3]) {
+      float dl = px - b[0], dr = b[1] - px, db = pz - b[2], df = b[3] - pz;
+      float m = min(dl, min(dr, min(db, df)));
+      if (m == dl) acc.x -= 1.4f;
+      else if (m == dr) acc.x += 1.4f;
+      else if (m == db) acc.z -= 1.4f;
+      else acc.z += 1.4f;
+    }
+    float cx = constrain(px, b[0], b[1]);
+    float cz = constrain(pz, b[2], b[3]);
+    float dx = px - cx, dz = pz - cz;
+    float d2 = dx * dx + dz * dz;
+    if (d2 < pad * pad && d2 > 1e-6f) {
+      float d = sqrt(d2);
+      float w = (pad - d) / pad;
+      acc.x += (dx / d) * w * 1.2f;
+      acc.z += (dz / d) * w * 1.2f;
+    }
+  }
+  if (acc.magSq() > 1e-4f) {
+    acc.normalize();
+    acc.mult(0.85f);
+  }
+  return acc;
+}
+
+void unstuckBandit(Bandit b, Player player) {
+  float r = 18;
+  PVector best = null;
+  float bestScore = -1e9f;
+  for (int i = 0; i < 16; i++) {
+    float a = i * TWO_PI / 16.0f + b.phase;
+    for (float dist = 40; dist <= 140; dist += 35) {
+      float tx = b.pos.x + cos(a) * dist;
+      float tz = b.pos.z + sin(a) * dist;
+      if (!isWalkableSpawnXZ(tx, tz, r)) continue;
+      float dPlayer = dist(tx, tz, player.pos.x, player.pos.z);
+      float score = -dPlayer + dist * 0.15f;
+      if (score > bestScore) {
+        bestScore = score;
+        best = new PVector(tx, 0, tz);
+      }
+    }
+  }
+  if (best != null) {
+    b.pos.x = best.x;
+    b.pos.z = best.z;
+  } else {
+    nudgeToClearPosition(b.pos, r);
+  }
+  b.stuckSec = 0;
+}
+
 void draw() {
+  if (gameFlow == FLOW_TITLE) {
+    drawTitleScreen();
+    return;
+  }
+  if (gameFlow == FLOW_CONTROLS) {
+    drawControlsIntroScreen();
+    return;
+  }
   float elapsed = (millis() - sceneStartMs) / 1000.0;
-  if (elapsed < 3) drawFirstScreen();
-  else drawSecondScreen(elapsed - 3.0);
+  drawSecondScreen(elapsed);
 }
 
-// Task-1: only canvas size + background.
-void drawFirstScreen() {
-  background(0);
+void beginPlaySession() {
+  stopMusic();
+  initGame();
+  sceneStartMs = millis();
+  gameFlow = FLOW_PLAY;
+  showControlsOverlay = false;
+  shooting = false;
 }
 
-// Task-2+: angled top-down western shootout with proper aiming + camera control.
-void drawSecondScreen(float t) {
-  background(0);
+/** Reset fill/tint so 2D HUD colors do not tint the next frame's textured ground. */
+void reset3DDrawState() {
+  blendMode(BLEND);
+  noTint();
+  fill(255);
+  stroke(255);
+  emissive(0, 0, 0);
+  noStroke();
+}
+
+void reset2DDrawState() {
+  blendMode(BLEND);
+  noTint();
+  fill(255);
+  stroke(255);
+  noStroke();
+}
+
+void drawTitleScreen() {
+  if (musicClip == null) startMenuMusic();
   hint(DISABLE_DEPTH_TEST);
   camera();
   perspective();
   noLights();
-  drawStarfield2D();
+  drawWesternMenuBgImage();
+  hint(ENABLE_DEPTH_TEST);
+
+  textFont(uiFontHud);
+  textAlign(CENTER, CENTER);
+  String title = "WESTERN BOUNTY";
+  float titleY = height * 0.38f;
+  float centerX = width * 0.5f;
+  drawTitleMexicanWave(title, centerX, titleY, TITLE_FONT_SIZE);
+
+  textAlign(CENTER, CENTER);
+  textSize(MENU_SUBTITLE_SIZE);
+  fill(255, 248, 225);
+  text("SEN3301 — 3D Arena Shootout", centerX, height * 0.46);
+  drawMenuExtras(centerX);
+
+  float clickY = height * 0.62f;
+  float blink = 0.5f + 0.5f * sin(millis() * CLICK_BLINK_SPEED);
+  int clickA = (int)lerp(CLICK_ALPHA_MIN, CLICK_ALPHA_MAX, blink);
+  String clickLabel = "Click to play";
+  textAlign(CENTER, CENTER);
+  textSize(MENU_CLICK_SIZE);
+  fill(0, 0, 0, min(255, clickA));
+  text(clickLabel, centerX + 2, clickY + 2);
+  fill(255, 252, 235, clickA);
+  text(clickLabel, centerX, clickY);
+  reset2DDrawState();
+}
+
+void drawControlsIntroScreen() {
+  hint(DISABLE_DEPTH_TEST);
+  camera();
+  perspective();
+  noLights();
+  drawWesternMenuBgImage();
+  drawMenuExtras(width * 0.5f);
+  drawControlsOverlayPanel("Click anywhere to start", true);
+  reset2DDrawState();
+}
+
+void drawControlsOverlayPanel(String footer, boolean fullBackdrop) {
+  hint(DISABLE_DEPTH_TEST);
+  camera();
+  perspective();
+  textFont(uiFontHud);
+  rectMode(CORNER);
+  if (fullBackdrop) {
+    noStroke();
+    fill(0, 90);
+    rect(0, 0, width, height);
+  } else {
+    noStroke();
+    fill(0, 165);
+    rect(0, 0, width, height);
+  }
+  float panelW = min(width - 40, 820);
+  float panelH = min(height - 80, 480);
+  float px = (width - panelW) * 0.5;
+  float py = (height - panelH) * 0.5;
+  drawWesternPanel(px, py, panelW, panelH, 12);
+  textAlign(CENTER, TOP);
+  fill(255, 242, 175);
+  textSize(42);
+  text("CONTROLS", width * 0.5, py + 20);
+  textSize(22);
+  textLeading(32);
+  fill(255, 252, 235);
+  String[] lines = {
+    "W A S D — move",
+    "Left mouse (hold) — shoot (aim on ground)",
+    "Right mouse + drag — rotate camera",
+    "Mouse wheel — zoom",
+    "1 / 2 / 3 — Revolver / Shotgun / Repeater",
+    "R — reload current weapon",
+    "Shift — sprint",
+    "Space — skip wave break",
+    "Q — quit (saves progress)"
+  };
+  float ty = py + 78;
+  float rowH = 34;
+  for (String ln : lines) {
+    noStroke();
+    fill(32, 20, 12, 200);
+    rect(px + 24, ty - 4, panelW - 48, rowH, 6);
+    stroke(140, 95, 45, 120);
+    strokeWeight(1);
+    noFill();
+    rect(px + 25, ty - 3, panelW - 50, rowH - 2, 5);
+    noStroke();
+    fill(255, 252, 235);
+    text(ln, width * 0.5, ty + 4);
+    ty += rowH + 6;
+  }
+  textSize(18);
+  fill(245, 235, 210);
+  text(maxWaves + " waves · clear all bandits or survive the timer", width * 0.5, py + panelH - 58);
+  textSize(24);
+  fill(255, 252, 240);
+  text(footer, width * 0.5, py + panelH - 30);
+  reset2DDrawState();
+}
+
+boolean controlsHudButtonHit(float mx, float my) {
+  return mx >= controlsBtnX && mx <= controlsBtnX + controlsBtnW
+    && my >= controlsBtnY && my <= controlsBtnY + controlsBtnH;
+}
+
+void drawControlsHudButton() {
+  controlsBtnX = 276;
+  controlsBtnY = 16;
+  boolean hot = controlsHudButtonHit(mouseX, mouseY);
+  drawUiButton(uiBtnControls, uiBtnControlsHot, controlsBtnX, controlsBtnY, controlsBtnW, controlsBtnH, hot);
+  if (uiBtnControls == null) {
+    textAlign(CENTER, CENTER);
+    textSize(13);
+    fill(248, 215, 125);
+    text("CONTROLS", controlsBtnX + controlsBtnW * 0.5, controlsBtnY + controlsBtnH * 0.5 + 1);
+  }
+  reset2DDrawState();
+}
+
+// Task-2+: angled top-down western shootout with proper aiming + camera control.
+void drawSecondScreen(float t) {
+  background(18, 12, 8);
   hint(ENABLE_DEPTH_TEST);
 
   float fr = max(frameRate, 30);
   float dt = 1.0 / fr;
-  if (!finished) {
+  boolean gameplayActive = !showControlsOverlay && !finished;
+  if (gameplayActive) {
     updateWaveTimers(dt);
     updateMovement(dt);
   }
@@ -587,16 +952,18 @@ void drawSecondScreen(float t) {
   updateAmmoGainFx(dt);
 
   setAngledCamera();
-  blendMode(BLEND);
+  reset3DDrawState();
   drawWesternEnvironment(t);
 
   aimPoint = groundFromMouse(mouseX, mouseY);
   player.updateAim(aimPoint);
-  player.update(t, dt);
-  updateSprintTrail(t, dt);
-  updateSprintBarFocus(dt);
+  if (gameplayActive) {
+    player.update(t, dt);
+    updateSprintTrail(t, dt);
+    updateSprintBarFocus(dt);
+  }
 
-  if (shooting && !finished && waveState == WAVE_STATE_FIGHT) {
+  if (gameplayActive && shooting && waveState == WAVE_STATE_FIGHT) {
     ArrayList<Bullet> volley = player.tryShootVolley(aimPoint);
     if (volley != null && volley.size() > 0) {
       bullets.addAll(volley);
@@ -608,17 +975,28 @@ void drawSecondScreen(float t) {
     player.display(t);
   }
 
-  updateAndDrawBandits(t, dt);
-  for (int li = lootPickups.size() - 1; li >= 0; li--) {
-    LootPickup lp = lootPickups.get(li);
-    lp.update(player);
-    if (lp.gone) lootPickups.remove(li);
+  if (gameplayActive) {
+    updateAndDrawBandits(t, dt);
+    for (int li = lootPickups.size() - 1; li >= 0; li--) {
+      LootPickup lp = lootPickups.get(li);
+      lp.update(player);
+      if (lp.gone) lootPickups.remove(li);
+    }
+  } else {
+    for (Bandit b : bandits) b.display(t);
   }
   for (LootPickup lp : lootPickups) lp.display(t);
-  updateAndDrawBullets(dt);
-  updateAndDrawEnemyBullets(dt);
-  updateAndDrawMuzzleFlashes(dt);
-  updateAndDrawHitSparks(dt);
+  if (gameplayActive) {
+    updateAndDrawBullets(dt);
+    updateAndDrawEnemyBullets(dt);
+    updateAndDrawMuzzleFlashes(dt);
+    updateAndDrawHitSparks(dt);
+  } else {
+    for (Bullet b : bullets) b.display();
+    for (EnemyBullet eb : enemyBullets) eb.display();
+    for (MuzzleFlash m : muzzleFlashes) m.display();
+    for (HitSpark s : hitSparks) s.display();
+  }
 
   drawAimMarker(aimPoint, t);
 
@@ -630,9 +1008,13 @@ void drawSecondScreen(float t) {
     healthPositions.add(new float[]{sx, sy, b.hp / b.maxHp});
   }
 
-  updateGameState(t);
+  if (gameplayActive) updateGameState(t);
 
-  updateAndDrawGore(dt);
+  if (gameplayActive) updateAndDrawGore(dt);
+  else {
+    for (GibChunk g : gibChunks) g.display();
+    for (BloodParticle bp : bloodParticles) bp.display();
+  }
 
   playerScreenFootX = screenX(player.pos.x, 14, player.pos.z);
   playerScreenFootY = screenY(player.pos.x, 14, player.pos.z);
@@ -652,8 +1034,8 @@ void drawSecondScreen(float t) {
   pushMatrix();
   translate(sx, sy);
   drawHealthBars(healthPositions);
-  drawRulesPanel2D();
   drawHudDistributed(t);
+  drawControlsHudButton();
   drawPlayerReloadBarScreen();
   drawReloadNeededFeedback(t);
   drawWaveIntermissionOverlay(t);
@@ -661,6 +1043,10 @@ void drawSecondScreen(float t) {
   drawHurtFeedbackOverlay();
   drawPickupPlusFx2D();
   drawAmmoGainFx2D();
+  reset2DDrawState();
+  if (showControlsOverlay) {
+    drawControlsOverlayPanel("Click anywhere or press H to close", false);
+  }
   hint(ENABLE_DEPTH_TEST);
 }
 
@@ -680,16 +1066,64 @@ void updateWaveTimers(float dt) {
   waveState = WAVE_STATE_FIGHT;
 }
 
-PVector randomBanditSpawn() {
-  for (int attempt = 0; attempt < 50; attempt++) {
-    float a = random(TWO_PI);
-    float rx = cos(a) * (arenaHalfW * 0.82);
-    float rz = sin(a) * (arenaHalfH * 0.82);
-    float dx = rx - player.pos.x;
-    float dz = rz - player.pos.z;
-    if (dx * dx + dz * dz > 280 * 280) return new PVector(rx, 0, rz);
+PVector tryBanditSpawnPoint(float x, float z, float spawnR) {
+  PVector p = new PVector(x, 0, z);
+  if (circleOverlapsColliderXZ(p.x, p.z, spawnR)) nudgeToClearPosition(p, spawnR);
+  if (isWalkableSpawnXZ(p.x, p.z, spawnR)) return p;
+  return null;
+}
+
+boolean farEnoughFromOthers(float x, float z, ArrayList<PVector> used, float minSep) {
+  float sep2 = minSep * minSep;
+  for (PVector u : used) {
+    float dx = x - u.x, dz = z - u.z;
+    if (dx * dx + dz * dz < sep2) return false;
   }
-  return new PVector(420, 0, -380);
+  return true;
+}
+
+/** Sector + distance spawn so wave enemies stay far from player and spread out. */
+PVector randomBanditSpawnForWave(int index, int total, int wave, ArrayList<PVector> used) {
+  float spawnR = 22;
+  float minFromPlayer = 520 + wave * 35;
+  float maxFromPlayer = min(arenaHalfW, arenaHalfH) * 0.68f;
+  float minSep = 165;
+
+  for (int attempt = 0; attempt < 140; attempt++) {
+    float sector = (index + 0.5f) / max(1, total);
+    float a = sector * TWO_PI + random(-0.42f, 0.42f);
+    float ring = random(minFromPlayer, maxFromPlayer);
+    float rx = player.pos.x + cos(a) * ring;
+    float rz = player.pos.z + sin(a) * ring;
+    if (!isInArenaXZ(rx, rz, 90)) continue;
+    float dx = rx - player.pos.x, dz = rz - player.pos.z;
+    if (dx * dx + dz * dz < minFromPlayer * minFromPlayer) continue;
+    if (!farEnoughFromOthers(rx, rz, used, minSep)) continue;
+    if (!isWalkableSpawnXZ(rx, rz, spawnR)) continue;
+    PVector p = new PVector(rx, 0, rz);
+    return p;
+  }
+
+  for (int attempt = 0; attempt < 80; attempt++) {
+    float a = random(TWO_PI);
+    float ring = random(minFromPlayer, maxFromPlayer);
+    float rx = player.pos.x + cos(a) * ring;
+    float rz = player.pos.z + sin(a) * ring;
+    if (!isInArenaXZ(rx, rz, 90)) continue;
+    float dx = rx - player.pos.x, dz = rz - player.pos.z;
+    if (dx * dx + dz * dz < minFromPlayer * minFromPlayer) continue;
+    if (!farEnoughFromOthers(rx, rz, used, minSep * 0.85f)) continue;
+    if (!isWalkableSpawnXZ(rx, rz, spawnR)) continue;
+    return new PVector(rx, 0, rz);
+  }
+
+  PVector fb = tryBanditSpawnPoint(-520, -420, spawnR);
+  if (fb != null && farEnoughFromOthers(fb.x, fb.z, used, minSep * 0.7f)) return fb;
+  fb = tryBanditSpawnPoint(520, 420, spawnR);
+  if (fb != null && farEnoughFromOthers(fb.x, fb.z, used, minSep * 0.7f)) return fb;
+  fb = tryBanditSpawnPoint(-480, 480, spawnR);
+  if (fb != null) return fb;
+  return new PVector(player.pos.x + cos(index) * minFromPlayer, 0, player.pos.z + sin(index) * minFromPlayer);
 }
 
 void spawnWave(int w) {
@@ -701,8 +1135,11 @@ void spawnWave(int w) {
     color(180, 60, 50), color(160, 100, 50), color(130, 60, 90),
     color(80, 120, 145), color(100, 80, 60)
   };
+  ArrayList<PVector> usedSpawns = new ArrayList<PVector>();
   for (int i = 0; i < n; i++) {
-    PVector p = randomBanditSpawn();
+    PVector p = randomBanditSpawnForWave(i, n, w, usedSpawns);
+    if (circleOverlapsColliderXZ(p.x, p.z, 20)) nudgeToClearPosition(p, 20);
+    usedSpawns.add(p.copy());
     float hpMul = 1 + 0.15 * (w - 1);
     float spdMul = 1 + 0.1 * (w - 1);
     bandits.add(new Bandit(p.x, p.z, outfits[i % outfits.length], spdMul, hpMul, w));
@@ -943,9 +1380,26 @@ PVector groundFromMouse(float mx, float my) {
 // === Input ===
 
 void mousePressed() {
-  float elapsed = (millis() - sceneStartMs) / 1000.0;
-  if (elapsed < 3) return;
-  if (mouseButton == LEFT) shooting = true;
+  if (gameFlow == FLOW_TITLE) {
+    gameFlow = FLOW_CONTROLS;
+    return;
+  }
+  if (gameFlow == FLOW_CONTROLS) {
+    beginPlaySession();
+    return;
+  }
+  if (gameFlow == FLOW_PLAY) {
+    if (showControlsOverlay) {
+      showControlsOverlay = false;
+      return;
+    }
+    if (mouseButton == LEFT && controlsHudButtonHit(mouseX, mouseY)) {
+      showControlsOverlay = true;
+      shooting = false;
+      return;
+    }
+    if (mouseButton == LEFT) shooting = true;
+  }
 }
 
 void mouseReleased() {
@@ -981,13 +1435,18 @@ void keyPressed() {
   }
   if (key == 'r' || key == 'R') {
     if (finished) {
-      sceneStartMs = millis() - 3000;
-      initGame();
-    } else {
+      beginPlaySession();
+    } else if (gameFlow == FLOW_PLAY && !showControlsOverlay) {
       player.startReload();
     }
   }
-  if (!finished) {
+  if (key == 'h' || key == 'H') {
+    if (gameFlow == FLOW_PLAY && !finished) {
+      showControlsOverlay = !showControlsOverlay;
+      if (showControlsOverlay) shooting = false;
+    }
+  }
+  if (!finished && gameFlow == FLOW_PLAY && !showControlsOverlay) {
     if (key == '1') player.setWeaponSlot(0);
     if (key == '2') player.setWeaponSlot(1);
     if (key == '3') player.setWeaponSlot(2);
@@ -1343,26 +1802,27 @@ void drawHudDistributed(float t) {
   }
 }
 
-/** Reload progress bar at player feet. */
+/** Reload progress bar at player feet (compact — no large panel). */
 void drawPlayerReloadBarScreen() {
   if (!player.reloading) return;
   float rd = player.wReloadSec[player.weaponSlot];
   float prog = 1.0 - constrain(player.reloadTimer / rd, 0, 1);
-  float bw = 168;
-  float bh = 14;
+  float bw = 148;
+  float bh = 12;
   float cx = constrain(playerScreenFootX, bw * 0.5f + 16, width - bw * 0.5f - 16);
-  float cy = constrain(playerScreenFootY + 28, 100, height - 120);
+  float cy = constrain(playerScreenFootY + 24, 100, height - 120);
   float left = cx - bw * 0.5;
-  float top = cy - 22;
+  float top = cy - 10;
   rectMode(CORNER);
-  drawWesternPanel(left - 8, top, bw + 16, bh + 36, 8);
-  textAlign(CENTER, TOP);
-  textSize(11);
-  fill(0, 130);
-  text("RELOAD", cx + 1, top + 9);
+  noStroke();
+  fill(14, 10, 7, 210);
+  rect(left - 4, top - 14, bw + 8, bh + 22, 5);
+  textAlign(CENTER, BOTTOM);
+  textSize(10);
   fill(255, 235, 200);
-  text("RELOAD", cx, top + 8);
-  drawHudBar(left, top + 26, bw, bh, prog, color(32, 22, 16), color(95, 205, 255), color(190, 145, 65));
+  text("RELOAD", cx, top - 2);
+  drawHudBar(left, top + 4, bw, bh, prog, color(32, 22, 16), color(95, 205, 255), color(190, 145, 65));
+  reset2DDrawState();
 }
 
 /** Empty mag reminder. */
@@ -1464,6 +1924,7 @@ void drawHurtFeedbackOverlay() {
 
 void drawWesternEnvironment(float t) {
   noStroke();
+  reset3DDrawState();
 
   pushMatrix();
   translate(0, 0, 0);
@@ -1506,6 +1967,7 @@ void drawWesternEnvironment(float t) {
   popMatrix();
 
   drawAmbientLife(t);
+  drawMapAmbience(t);
 
   drawSaloon(worldX(-560), worldZ(-220), t);
   drawSheriffOffice(worldX(560), worldZ(-190));
@@ -1574,6 +2036,78 @@ void drawAmbientLife(float t) {
     popMatrix();
   }
   popMatrix();
+}
+
+/** Extra map motion: campfire, lanterns, birds, dust, swaying sign. */
+void drawMapAmbience(float t) {
+  noStroke();
+
+  float salX = worldX(-560), salZ = worldZ(-220);
+  pushMatrix();
+  translate(salX + worldX(55), -8, salZ + worldZ(75));
+  float flicker = 0.7f + 0.3f * noise(t * 4.2);
+  emissive(255, 140, 60);
+  fill(255, 120 + flicker * 80, 40, 200);
+  sphere(6 + flicker * 2);
+  fill(255, 200, 100, 90);
+  translate(0, 8, 0);
+  sphere(3 + flicker);
+  emissive(0, 0, 0);
+  popMatrix();
+
+  float[][] lanterns = {
+    {worldX(-560), worldZ(-220), worldX(90)},
+    {worldX(560), worldZ(-190), worldX(85)},
+    {worldX(-540), worldZ(250), worldX(70)}
+  };
+  for (int i = 0; i < lanterns.length; i++) {
+    pushMatrix();
+    translate(lanterns[i][0], -72, lanterns[i][1] + lanterns[i][2]);
+    float glow = 0.65f + 0.35f * sin(t * 3.1 + i * 1.7);
+    emissive(255, 200, 120);
+    fill(255, 220, 150, 180 * glow);
+    sphere(4);
+    emissive(0, 0, 0);
+    popMatrix();
+  }
+
+  for (int b = 0; b < 5; b++) {
+    float bx = map(b, 0, 4, -arenaHalfW * 0.7f, arenaHalfW * 0.7f);
+    float by = -55 + sin(t * 0.9 + b * 1.3) * 8;
+    float bz = map(noise(b * 0.7, t * 0.05), 0, 1, -arenaHalfH * 0.6f, arenaHalfH * 0.6f);
+    pushMatrix();
+    translate(bx + sin(t * 1.2 + b) * 120, by, bz + cos(t * 0.8 + b) * 80);
+    rotateY(t * 0.5 + b);
+    fill(40, 35, 30, 160);
+    box(2, 0.4, 5);
+    popMatrix();
+  }
+
+  for (int d = 0; d < 6; d++) {
+    float nx = noise(d * 2.1, t * 0.03);
+    float nz = noise(d * 1.3 + 40, t * 0.025);
+    float dx = map(nx, 0, 1, -arenaHalfW * 0.75f, arenaHalfW * 0.75f);
+    float dz = map(nz, 0, 1, -arenaHalfH * 0.75f, arenaHalfH * 0.75f);
+    if (circleOverlapsColliderXZ(dx, dz, 25)) continue;
+    pushMatrix();
+    translate(dx, -2, dz);
+    float h = 12 + sin(t * 2 + d) * 4;
+    fill(200, 175, 130, 35);
+    box(8, h, 8);
+    fill(220, 200, 160, 25);
+    translate(0, h * 0.5f, 0);
+    box(5, h * 0.6f, 5);
+    popMatrix();
+  }
+
+  pushMatrix();
+  translate(worldX(560), -108, worldZ(-190) + worldZ(88));
+  rotateY(sin(t * 0.9) * 0.12);
+  fill(200, 165, 90);
+  box(18, 4, 2);
+  popMatrix();
+
+  emissive(0, 0, 0);
 }
 
 void drawRockCluster(float x, float z, float t, float scl) {
@@ -1762,6 +2296,19 @@ void drawWaterTower(float x, float z, float t) {
     drawCylinder(56, 70, 24);
   }
 
+  pushMatrix();
+  translate(0, -168, 0);
+  rotateY(t * 1.4);
+  fill(90, 62, 40, 200);
+  for (int b = 0; b < 4; b++) {
+    pushMatrix();
+    rotateY(b * HALF_PI);
+    translate(0, 0, 38);
+    box(4, 28, 2);
+    popMatrix();
+  }
+  popMatrix();
+
   fill(80, 50, 30);
   for (int i = -1; i <= 1; i++) {
     pushMatrix();
@@ -1887,11 +2434,14 @@ void drawCactus(float x, float z) {
   pushMatrix();
   translate(x, 0, z);
   noStroke();
-  fill(60, 132, 71);
+  boolean useTex = texCactus != null;
+  if (!useTex) fill(60, 132, 71);
+  else fill(75, 140, 82);
 
   pushMatrix();
   translate(0, -45, 0);
-  drawCylinder(12, 90, 12);
+  if (useTex) drawTexturedCylinder(texCactus, 12, 90, 12, false);
+  else drawCylinder(12, 90, 12);
   popMatrix();
 
   pushMatrix();
@@ -1902,11 +2452,13 @@ void drawCactus(float x, float z) {
   pushMatrix();
   translate(-22, -55, 0);
   rotateZ(PI / 3);
-  drawCylinder(7, 26, 10);
+  if (useTex) drawTexturedCylinder(texCactus, 7, 26, 10, false);
+  else drawCylinder(7, 26, 10);
   popMatrix();
   pushMatrix();
   translate(-30, -68, 0);
-  drawCylinder(7, 18, 10);
+  if (useTex) drawTexturedCylinder(texCactus, 7, 18, 10, false);
+  else drawCylinder(7, 18, 10);
   popMatrix();
   pushMatrix();
   translate(-30, -77, 0);
@@ -1916,17 +2468,20 @@ void drawCactus(float x, float z) {
   pushMatrix();
   translate(20, -45, 0);
   rotateZ(-PI / 3);
-  drawCylinder(6, 22, 10);
+  if (useTex) drawTexturedCylinder(texCactus, 6, 22, 10, false);
+  else drawCylinder(6, 22, 10);
   popMatrix();
   pushMatrix();
   translate(26, -56, 0);
-  drawCylinder(6, 14, 10);
+  if (useTex) drawTexturedCylinder(texCactus, 6, 14, 10, false);
+  else drawCylinder(6, 14, 10);
   popMatrix();
   pushMatrix();
   translate(26, -63, 0);
   sphere(6);
   popMatrix();
 
+  if (useTex) noTint();
   popMatrix();
 }
 

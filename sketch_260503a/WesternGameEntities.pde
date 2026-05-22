@@ -8,6 +8,52 @@ PVector rotateDirXZ(PVector d, float ang) {
   return o;
 }
 
+/** Try to move by preferDir * len without entering scene colliders (bandit radius ~18). */
+PVector pickClearStepXZ(PVector from, PVector preferDir, float len, float radius) {
+  if (preferDir.magSq() < 1e-6) return new PVector(0, 0, 0);
+  preferDir.normalize();
+  PVector bestDelta = null;
+  float bestScore = -1e9f;
+  int nDirs = 16;
+  for (int i = 0; i <= nDirs; i++) {
+    PVector d;
+    if (i == 0) d = preferDir.copy();
+    else {
+      float a = (i - 1) * TWO_PI / nDirs;
+      d = new PVector(cos(a), 0, sin(a));
+    }
+    d.normalize();
+    for (float scale = 1.0f; scale >= 0.35f; scale -= 0.325f) {
+      float step = len * scale;
+      float px = from.x + d.x * step;
+      float pz = from.z + d.z * step;
+      if (circleOverlapsColliderXZ(px, pz, radius)) continue;
+      float dot = preferDir.x * d.x + preferDir.z * d.z;
+      float score = dot * 2.0f + scale;
+      if (score > bestScore) {
+        bestScore = score;
+        bestDelta = new PVector(d.x * step, 0, d.z * step);
+      }
+      break;
+    }
+  }
+  if (bestDelta != null) return bestDelta;
+  PVector perpL = new PVector(-preferDir.z, 0, preferDir.x);
+  PVector perpR = new PVector(preferDir.z, 0, -preferDir.x);
+  for (PVector side : new PVector[]{perpL, perpR}) {
+    for (int sgn = -1; sgn <= 1; sgn += 2) {
+      PVector d = PVector.mult(side, sgn);
+      d.normalize();
+      float px = from.x + d.x * len;
+      float pz = from.z + d.z * len;
+      if (!circleOverlapsColliderXZ(px, pz, radius)) {
+        return new PVector(d.x * len, 0, d.z * len);
+      }
+    }
+  }
+  return new PVector(0, 0, 0);
+}
+
 class Player {
   PVector pos;
   float speed = 280;
@@ -21,12 +67,14 @@ class Player {
   int weaponSlot = 0;
   int[] wMax = {30, 8, 40};
   int[] wAmmo = {30, 8, 40};
-  float[] wReloadSec = {1.25, 1.75, 1.1};
+  float[] wReloadSec = {1.45, 2.25, 1.35};
   float[] wCooldown = {0.17, 0.5, 0.11};
 
   boolean reloading = false;
   float reloadTimer = 0;
   float recoilKick = 0;
+  float knockbackVx = 0;
+  float knockbackVz = 0;
 
   float stamina = 1;
   int gold = 0;
@@ -80,6 +128,14 @@ class Player {
     else walkPhase += dt * 1.5;
     updateReload(dt);
     recoilKick = max(0, recoilKick - dt * 8.5);
+    if (knockbackVx * knockbackVx + knockbackVz * knockbackVz > 1) {
+      pos.x += knockbackVx * dt;
+      pos.z += knockbackVz * dt;
+      resolveCircleColliders(pos, 26);
+      float damp = max(0, 1 - dt * 10.5f);
+      knockbackVx *= damp;
+      knockbackVz *= damp;
+    }
     if (sprintHeld && moving && stamina > 0 && !finished && waveState == WAVE_STATE_FIGHT) {
       stamina = max(0, stamina - dt * 0.62);
     } else {
@@ -106,8 +162,10 @@ class Player {
       float spd = 980;
       for (int i = -2; i <= 2; i++) {
         PVector d = rotateDirXZ(dir, i * 0.095);
-        list.add(new Bullet(tip, PVector.mult(d, spd), 15));
+        list.add(new Bullet(tip, PVector.mult(d, spd), 24));
       }
+      knockbackVx -= dir.x * 480f;
+      knockbackVz -= dir.z * 480f;
     } else if (weaponSlot == 2) {
       list.add(new Bullet(tip, PVector.mult(dir, 1180), 19));
     } else {
@@ -275,6 +333,8 @@ class Bandit {
   float walkPhase = 0;
   int waveIndex = 1;
   float recoilKick = 0;
+  float stuckSec = 0;
+  float lastMoveDist = 0;
 
   Bandit(float x, float z, int outfit, float speedMul, float hpMul, int wave) {
     pos = new PVector(x, 0, z);
@@ -300,18 +360,44 @@ class Bandit {
     PVector toPlayer = PVector.sub(player.pos, pos);
     float dist = toPlayer.mag();
 
+    PVector before = pos.copy();
     if (dist > 1) {
       toPlayer.normalize();
-      float side = sin(t * 2.5 + phase) * 0.22;
-      PVector strafe = new PVector(-toPlayer.z, 0, toPlayer.x).mult(side);
-      PVector step = PVector.add(toPlayer, strafe).normalize().mult(speed * 85 * dt);
-      pos.add(step);
+      PVector tangent = new PVector(-toPlayer.z, 0, toPlayer.x);
+      float strafeAmt = sin(t * 2.5f + phase) * 0.28f;
+      PVector wish = toPlayer.copy();
+      if (dist < 58) {
+        wish.mult(-0.5f);
+        wish.add(PVector.mult(tangent, strafeAmt * 1.2f));
+      } else if (dist < 120) {
+        wish.add(PVector.mult(tangent, strafeAmt));
+      } else if (dist > 420) {
+        wish.mult(1.15f);
+      }
+      PVector avoid = colliderSteerForce(pos.x, pos.z, 18);
+      if (avoid.magSq() > 0.01f) {
+        wish.add(avoid);
+        if (wish.magSq() > 1e-6) wish.normalize();
+      } else if (wish.magSq() > 1e-6) {
+        wish.normalize();
+      }
+      float stepLen = speed * 85 * dt;
+      PVector delta = pickClearStepXZ(pos, wish, stepLen, 18);
+      if (delta.magSq() < stepLen * stepLen * 0.08f && dist > 45) {
+        delta = pickClearStepXZ(pos, wish, stepLen * 1.35f, 16);
+      }
+      pos.add(delta);
       walkPhase += dt * 9;
     }
 
     pos.x = constrain(pos.x, -arenaHalfW + 70, arenaHalfW - 70);
     pos.z = constrain(pos.z, -arenaHalfH + 70, arenaHalfH - 70);
-    resolveCircleColliders(pos, 18, 10);
+    resolveCircleColliders(pos, 18, 14);
+
+    lastMoveDist = dist(before.x, before.z, pos.x, pos.z);
+    if (lastMoveDist < 0.8f * speed * 85 * dt && dist > 50) stuckSec += dt;
+    else stuckSec = max(0, stuckSec - dt * 2);
+    if (stuckSec > 0.35f) unstuckBandit(this, player);
 
     if (dist < 56) {
       int now = millis();
@@ -532,7 +618,7 @@ class LootPickup {
     if (dx * dx + dz * dz < 36 * 36) {
       gone = true;
       if (kind != 2) {
-        spawnPickupPlusBurst(screenX(p.pos.x, -70, p.pos.z), screenY(p.pos.x, -70, p.pos.z), kind);
+        spawnPickupPlusBurst(screenX(x, -70, z), screenY(x, -70, z), kind);
       }
       if (kind == 0) {
         int g = 18 + (int)random(14);
@@ -548,11 +634,11 @@ class LootPickup {
           p.wAmmo[i] = min(p.wMax[i], p.wAmmo[i] + add);
           sum += p.wAmmo[i] - before;
         }
-        float psx = screenX(p.pos.x, -52, p.pos.z);
-        float psy = screenY(p.pos.x, -52, p.pos.z);
+        float psx = screenX(x, -52, z);
+        float psy = screenY(x, -52, z);
         spawnAmmoGainFloat(psx, psy, sum);
       }
-      playWavSafe("reload.wav");
+      playPickupSound();
     }
   }
 

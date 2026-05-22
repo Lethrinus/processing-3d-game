@@ -1,2 +1,2 @@
 highScore=9002
-totalKills=248
+totalKills=278

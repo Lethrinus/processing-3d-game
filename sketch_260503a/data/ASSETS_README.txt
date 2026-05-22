@@ -14,16 +14,24 @@ data/
     roof_rust.jpg
     ground_dirt.jpg      (optional; procedural noise if absent)
     sky_stars.png        (optional; black background still OK for specs)
+  ui/                    (optional — button images for HUD / menu)
+    btn_controls.png     (~108×30, normal)
+    btn_controls_hot.png (optional hover state)
+    western_bg.png       (title + controls fullscreen background)
+    hat_cowboy.png       (tilted hat on title text — transparent PNG)
+    hat_pixel.png        (alternate name for hat sprite)
+    hat.png              (fallback name)
   sounds/
-    gun_player.wav
+    gun_player.wav / gun_player.mp3
+    gun_reload.mp3 / reload.wav
     gun_enemy.wav
     hit_player.wav
     hit_enemy.wav
-    reload.wav
     wave_clear.wav
     win.wav
     lose.wav
-    music_loop.wav       (optional loop)
+    western_soundtrack.mp3   (title + controls menu loop)
+    music_loop.wav           (optional in-game loop)
 
 --------------------------------------------------------------------------------
 IMAGES — suggested use
@@ -41,26 +49,43 @@ IMAGES — suggested use
    - Ground plane. Suggestion: 1024x1024 desert / dirt seamless.
    - If missing: short noise pattern is generated in code.
 
-4) textures/sky_stars.png (optional)
-   - Dark sky + stars; if missing, starfield is drawn procedurally.
+4) ui/western_bg.png
+   - Full-screen menu background (title + controls).
 
 --------------------------------------------------------------------------------
 AUDIO — format and tips
 --------------------------------------------------------------------------------
-Format: WAV (PCM), 44.1 kHz, mono or stereo — no extra libraries.
+Format: WAV (PCM) or MP3. MP3 needs code/jlayer-1.0.1.jar (included in sketch).
 Keep clips short (gun 0.1–0.4 s, hits 0.1–0.2 s) for memory.
 
-- gun_player.wav   : revolver crack (short, sharp)
+- gun_player.wav / gun_player.mp3 : revolver crack (short, sharp)
+- gun_reload.mp3 / reload.wav     : magazine / lever
+- western_soundtrack.mp3          : menu music (loops on title + controls)
 - gun_enemy.wav    : thinner / distant shot
 - hit_player.wav   : thud or impact
 - hit_enemy.wav    : body hit
-- reload.wav       : magazine / lever
 - wave_clear.wav   : short fanfare
 - win.wav          : win sting (1–2 s)
 - lose.wav         : low defeat tone
 - music_loop.wav   : western ambient (optional, 30–60 s loop)
 
 Free examples: freesound.org (check license), OpenGameArt, Kenney.nl (CC0).
+
+--------------------------------------------------------------------------------
+OPTIONAL UI BUTTON IMAGES
+--------------------------------------------------------------------------------
+Place PNGs under data/ui/. If btn_controls.png exists, the in-game CONTROLS
+button uses the image instead of a drawn rectangle. Hover uses btn_controls_hot.png
+when provided.
+
+Suggested size: about 108×30 px (or 2× for retina — Processing scales to fit).
+
+Menu hats: use a side-view or 3/4 cowboy hat PNG with transparent background
+(32–128 px pixel art works well). The game drifts several copies across the
+title and controls screens. See also ASSET_LIST_TR.md for a full file checklist.
+
+You can add more images later (title logo, per-control icons) and load them
+with tryLoadImage("ui/your_file.png") the same way as textures.
 
 --------------------------------------------------------------------------------
 HOW TO ADD OR CHANGE TEXTURES (Processing)
