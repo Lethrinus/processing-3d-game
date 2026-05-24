@@ -15,6 +15,7 @@ Yavuzhan Özbek 2201927
 */
 
 import java.util.ArrayList;
+import java.util.Locale;
 import java.io.File;
 import javax.sound.sampled.Clip;
 
@@ -91,6 +92,32 @@ final float WAVE_BREAK_DURATION = 8.0;
 int currentWave = 1;
 int maxWaves = 5;
 
+/** Staggered wave spawns — one bandit every STAGGER_SPAWN_INTERVAL sec. */
+final float STAGGER_SPAWN_INTERVAL = 0.72f;
+ArrayList<PendingBandit> pendingBanditSpawns = new ArrayList<PendingBandit>();
+boolean waveSpawning = false;
+float staggerSpawnTimer = 0;
+
+/** Spawn önizlemesi — düşmanlar gelmeden önce işaretler. */
+final float WAVE_PREVIEW_DURATION = 2.85f;
+final float WAVE_BANNER_DURATION = 3.75f;
+float wavePreviewTimer = 0;
+float waveBannerTimer = 0;
+int waveBannerNumber = 1;
+ArrayList<PVector> previewSpawnMarkers = new ArrayList<PVector>();
+
+ArrayList<ShellCasing> shellCasings = new ArrayList<ShellCasing>();
+float camShakeAmp = 0;
+float camShakePx = 0;
+
+/** Coarse grid A* for bandit pathfinding around buildings. */
+final float PATH_CELL = 100f;
+int pathCols, pathRows;
+boolean[] pathBlocked;
+int[] pathDirDx = {1, -1, 0, 0, 1, 1, -1, -1};
+int[] pathDirDz = {0, 0, 1, -1, 1, -1, 1, -1};
+float[] pathDirCost = {1, 1, 1, 1, 1.414f, 1.414f, 1.414f, 1.414f};
+
 PImage texBarrel, texRoof, texGround, texCactus;
 /** Optional UI sprites in data/ui/ — game draws text buttons if missing. */
 PImage uiBtnControls, uiBtnControlsHot;
@@ -98,9 +125,11 @@ PImage uiBtnControls, uiBtnControlsHot;
 PImage uiWesternBg;
 Clip musicClip;
 
-/** Ses seviyesi — sadece burayı değiştir (0.0 = sessiz, 1.0 = tam). */
-final float GAME_SFX_VOLUME = 0.05f;
-final float GAME_MUSIC_VOLUME = 0.05f;
+/** Varsayılan ses (ayarlar menüsünden değişir; progression.txt’e kaydedilir). */
+final float GAME_SFX_VOLUME_DEFAULT = 0.22f;
+final float GAME_MUSIC_VOLUME_DEFAULT = 0.16f;
+float settingsSfxVol = GAME_SFX_VOLUME_DEFAULT;
+float settingsMusicVol = GAME_MUSIC_VOLUME_DEFAULT;
 
 /** WESTERN BOUNTY — harflerden geçen dalga */
 final int TITLE_FONT_SIZE = 62;
@@ -128,7 +157,12 @@ float sprintBarFocus = 0;
 final int FLOW_TITLE = 0;
 final int FLOW_CONTROLS = 1;
 final int FLOW_PLAY = 2;
+final int FLOW_SETTINGS = 3;
 int gameFlow = FLOW_TITLE;
+float settingsBtnX, settingsBtnY, settingsBtnW = 200, settingsBtnH = 44;
+float settingsSfxBarY, settingsMusicBarY, settingsBarW = 320, settingsBarH = 22;
+boolean settingsDraggingSfx = false;
+boolean settingsDraggingMusic = false;
 boolean showControlsOverlay = false;
 float controlsBtnX, controlsBtnY, controlsBtnW = 108, controlsBtnH = 30;
 
@@ -168,9 +202,8 @@ void setup() {
   buildSceneColliders();
   loadTextureAssets();
   loadUiAssets();
-  SoundHelper.sfxVolume = GAME_SFX_VOLUME;
-  SoundHelper.musicVolume = GAME_MUSIC_VOLUME;
   loadProgression();
+  applyAudioVolumes();
   gameFlow = FLOW_TITLE;
   startMenuMusic();
 }
@@ -301,9 +334,31 @@ String firstSoundPath(String... names) {
   return null;
 }
 
+float sanitizeVolume(float v, float fallback) {
+  if (Float.isNaN(v) || Float.isInfinite(v)) return fallback;
+  return constrain(v, 0, 1);
+}
+
+/** progression.txt — locale bağımsız (nokta ondalık). */
+float parseVolumeSetting(String v, float fallback) {
+  if (v == null || v.length() == 0) return fallback;
+  String s = v.trim();
+  if (s.equalsIgnoreCase("nan") || s.equalsIgnoreCase("null")) return fallback;
+  s = s.replace(',', '.');
+  float f = parseFloat(s);
+  return sanitizeVolume(f, fallback);
+}
+
+String formatVolumeFile(float v) {
+  return String.format(Locale.US, "%.3f", sanitizeVolume(v, 0.22f));
+}
+
 void loadProgression() {
   progressionHighScore = 0;
   progressionTotalKills = 0;
+  settingsSfxVol = GAME_SFX_VOLUME_DEFAULT;
+  settingsMusicVol = GAME_MUSIC_VOLUME_DEFAULT;
+  boolean repairVolumes = false;
   String[] raw = loadStrings("progression.txt");
   if (raw == null) return;
   for (int i = 0; i < raw.length; i++) {
@@ -315,14 +370,36 @@ void loadProgression() {
     String v = line.substring(eq + 1).trim();
     if (k.equals("highScore")) progressionHighScore = max(0, parseInt(v));
     if (k.equals("totalKills")) progressionTotalKills = max(0, parseInt(v));
+    if (k.equals("sfxVolume")) {
+      if (v.equalsIgnoreCase("nan") || v.indexOf(',') >= 0) repairVolumes = true;
+      settingsSfxVol = parseVolumeSetting(v, GAME_SFX_VOLUME_DEFAULT);
+    }
+    if (k.equals("musicVolume")) {
+      if (v.equalsIgnoreCase("nan") || v.indexOf(',') >= 0) repairVolumes = true;
+      settingsMusicVol = parseVolumeSetting(v, GAME_MUSIC_VOLUME_DEFAULT);
+    }
   }
+  settingsSfxVol = sanitizeVolume(settingsSfxVol, GAME_SFX_VOLUME_DEFAULT);
+  settingsMusicVol = sanitizeVolume(settingsMusicVol, GAME_MUSIC_VOLUME_DEFAULT);
+  if (repairVolumes) saveProgression();
 }
 
 void saveProgression() {
+  settingsSfxVol = sanitizeVolume(settingsSfxVol, GAME_SFX_VOLUME_DEFAULT);
+  settingsMusicVol = sanitizeVolume(settingsMusicVol, GAME_MUSIC_VOLUME_DEFAULT);
   saveStrings(dataPath("progression.txt"), new String[] {
     "highScore=" + progressionHighScore,
-    "totalKills=" + progressionTotalKills
+    "totalKills=" + progressionTotalKills,
+    "sfxVolume=" + formatVolumeFile(settingsSfxVol),
+    "musicVolume=" + formatVolumeFile(settingsMusicVol)
   });
+}
+
+void applyAudioVolumes() {
+  settingsSfxVol = sanitizeVolume(settingsSfxVol, GAME_SFX_VOLUME_DEFAULT);
+  settingsMusicVol = sanitizeVolume(settingsMusicVol, GAME_MUSIC_VOLUME_DEFAULT);
+  SoundHelper.sfxVolume = settingsSfxVol;
+  SoundHelper.musicVolume = settingsMusicVol;
 }
 
 void persistRunIfEnded() {
@@ -338,10 +415,45 @@ void updateDamageFlash(float dt) {
     float lost = max(0, lastHp - player.hp);
     hurtRing = min(1, hurtRing + 0.95 + lost * 0.012);
     hurtShakePx = min(18, hurtShakePx + 4.2 + lost * 0.06);
+    addCamShake(3.5f + lost * 0.08f);
   }
   if (player != null) lastHp = player.hp;
   hurtShakePx *= exp(-dt * 11);
   hurtRing = max(0, hurtRing - dt * 2.85);
+  updateCamShake(dt);
+}
+
+void addCamShake(float amp) {
+  camShakeAmp = min(24, camShakeAmp + amp);
+}
+
+void updateCamShake(float dt) {
+  camShakeAmp *= exp(-dt * 13.5);
+  camShakePx = (random(-1, 1) + random(-1, 1)) * 0.5f * camShakeAmp;
+}
+
+void emitShotgunShells(PVector tip, float facing) {
+  for (int i = 0; i < 2; i++) {
+    shellCasings.add(new ShellCasing(tip, facing + random(-0.12f, 0.12f)));
+  }
+}
+
+void updateWaveIntro(float dt) {
+  if (waveBannerTimer > 0) waveBannerTimer -= dt;
+  if (wavePreviewTimer <= 0) return;
+  wavePreviewTimer -= dt;
+  if (wavePreviewTimer <= 0) beginStaggeredSpawnsFromPending();
+}
+
+void beginStaggeredSpawnsFromPending() {
+  if (pendingBanditSpawns.size() == 0) {
+    waveSpawning = false;
+    return;
+  }
+  PendingBandit first = pendingBanditSpawns.remove(0);
+  bandits.add(new Bandit(first.x, first.z, first.outfit, first.spdMul, first.hpMul, first.wave));
+  waveSpawning = pendingBanditSpawns.size() > 0;
+  staggerSpawnTimer = STAGGER_SPAWN_INTERVAL;
 }
 
 /** Spawn ground loot after a kill (called from sketch bullet loop only). */
@@ -642,6 +754,149 @@ void buildSceneColliders() {
   addCircleCollider(worldX(30), worldZ(-150), bR);
   addCircleCollider(worldX(70), worldZ(120), bR);
   addCircleCollider(worldX(-380), worldZ(0), bR);
+  rebuildPathGrid();
+}
+
+int pathIndex(int gx, int gz) {
+  return gx + gz * pathCols;
+}
+
+float pathCellCenterX(int gx) {
+  return -arenaHalfW + (gx + 0.5f) * PATH_CELL;
+}
+
+float pathCellCenterZ(int gz) {
+  return -arenaHalfH + (gz + 0.5f) * PATH_CELL;
+}
+
+int worldToGx(float x) {
+  return constrain((int)floor((x + arenaHalfW) / PATH_CELL), 0, pathCols - 1);
+}
+
+int worldToGz(float z) {
+  return constrain((int)floor((z + arenaHalfH) / PATH_CELL), 0, pathRows - 1);
+}
+
+void rebuildPathGrid() {
+  pathCols = max(10, (int)ceil((arenaHalfW * 2f) / PATH_CELL));
+  pathRows = max(10, (int)ceil((arenaHalfH * 2f) / PATH_CELL));
+  pathBlocked = new boolean[pathCols * pathRows];
+  for (int gz = 0; gz < pathRows; gz++) {
+    for (int gx = 0; gx < pathCols; gx++) {
+      float wx = pathCellCenterX(gx);
+      float wz = pathCellCenterZ(gz);
+      pathBlocked[pathIndex(gx, gz)] =
+        !isInArenaXZ(wx, wz, 50) || circleOverlapsColliderXZ(wx, wz, 40);
+    }
+  }
+}
+
+int nearestFreePathCell(int gx, int gz) {
+  if (!pathBlocked[pathIndex(gx, gz)]) return pathIndex(gx, gz);
+  for (int ring = 1; ring < max(pathCols, pathRows); ring++) {
+    for (int dz = -ring; dz <= ring; dz++) {
+      for (int dx = -ring; dx <= ring; dx++) {
+        if (abs(dx) != ring && abs(dz) != ring) continue;
+        int nx = gx + dx, nz = gz + dz;
+        if (nx < 0 || nz < 0 || nx >= pathCols || nz >= pathRows) continue;
+        int idx = pathIndex(nx, nz);
+        if (!pathBlocked[idx]) return idx;
+      }
+    }
+  }
+  return pathIndex(gx, gz);
+}
+
+/** A* path as world waypoints (cell centers); empty if unreachable. */
+ArrayList<PVector> findPathWorld(float sx, float sz, float ex, float ez) {
+  ArrayList<PVector> out = new ArrayList<PVector>();
+  if (pathBlocked == null || pathBlocked.length == 0) rebuildPathGrid();
+  int sgx = worldToGx(sx), sgz = worldToGz(sz);
+  int egx = worldToGx(ex), egz = worldToGz(ez);
+  int start = nearestFreePathCell(sgx, sgz);
+  int goal = nearestFreePathCell(egx, egz);
+  if (start == goal) {
+    out.add(new PVector(ex, 0, ez));
+    return out;
+  }
+  int n = pathCols * pathRows;
+  float[] gScore = new float[n];
+  int[] cameFrom = new int[n];
+  boolean[] closed = new boolean[n];
+  for (int i = 0; i < n; i++) {
+    gScore[i] = 1e9f;
+    cameFrom[i] = -1;
+  }
+  gScore[start] = 0;
+  int[] openSet = new int[n];
+  int openCount = 0;
+  openSet[openCount++] = start;
+  while (openCount > 0) {
+    int bestI = 0;
+    float bestF = 1e9f;
+    for (int oi = 0; oi < openCount; oi++) {
+      int idx = openSet[oi];
+      int gx = idx % pathCols, gz = idx / pathCols;
+      float h = dist(gx, gz, egx, egz);
+      float f = gScore[idx] + h;
+      if (f < bestF) {
+        bestF = f;
+        bestI = oi;
+      }
+    }
+    int current = openSet[bestI];
+    openSet[bestI] = openSet[--openCount];
+    if (closed[current]) continue;
+    closed[current] = true;
+    if (current == goal) {
+      int c = goal;
+      while (c != -1) {
+        int gx = c % pathCols, gz = c / pathCols;
+        out.add(0, new PVector(pathCellCenterX(gx), 0, pathCellCenterZ(gz)));
+        c = cameFrom[c];
+      }
+      if (out.size() > 0) {
+        PVector last = out.get(out.size() - 1);
+        last.x = ex;
+        last.z = ez;
+      }
+      return out;
+    }
+    int cgx = current % pathCols, cgz = current / pathCols;
+    for (int d = 0; d < pathDirDx.length; d++) {
+      int ngx = cgx + pathDirDx[d], ngz = cgz + pathDirDz[d];
+      if (ngx < 0 || ngz < 0 || ngx >= pathCols || ngz >= pathRows) continue;
+      int ni = pathIndex(ngx, ngz);
+      if (pathBlocked[ni] || closed[ni]) continue;
+      float tentative = gScore[current] + PATH_CELL * pathDirCost[d];
+      if (tentative < gScore[ni]) {
+        cameFrom[ni] = current;
+        gScore[ni] = tentative;
+        boolean inOpen = false;
+        for (int oi = 0; oi < openCount; oi++) {
+          if (openSet[oi] == ni) {
+            inOpen = true;
+            break;
+          }
+        }
+        if (!inOpen && openCount < n) openSet[openCount++] = ni;
+      }
+    }
+  }
+  return out;
+}
+
+void updateStaggeredSpawns(float dt) {
+  if (!waveSpawning || pendingBanditSpawns.size() == 0) {
+    waveSpawning = false;
+    return;
+  }
+  staggerSpawnTimer -= dt;
+  if (staggerSpawnTimer > 0) return;
+  staggerSpawnTimer = STAGGER_SPAWN_INTERVAL;
+  PendingBandit e = pendingBanditSpawns.remove(0);
+  bandits.add(new Bandit(e.x, e.z, e.outfit, e.spdMul, e.hpMul, e.wave));
+  if (pendingBanditSpawns.size() == 0) waveSpawning = false;
 }
 
 /** Push a circle (px,pz,r) out of all axis-aligned XZ boxes. */
@@ -772,6 +1027,10 @@ void draw() {
     drawTitleScreen();
     return;
   }
+  if (gameFlow == FLOW_SETTINGS) {
+    drawSettingsScreen();
+    return;
+  }
   if (gameFlow == FLOW_CONTROLS) {
     drawControlsIntroScreen();
     return;
@@ -818,7 +1077,7 @@ void drawTitleScreen() {
 
   textFont(uiFontHud);
   textAlign(CENTER, CENTER);
-  String title = "WESTERN BOUNTY";
+  String title = "MAN WITH NO NAME";
   float titleY = height * 0.38f;
   float centerX = width * 0.5f;
   drawTitleMexicanWave(title, centerX, titleY, TITLE_FONT_SIZE);
@@ -839,7 +1098,100 @@ void drawTitleScreen() {
   text(clickLabel, centerX + 2, clickY + 2);
   fill(255, 252, 235, clickA);
   text(clickLabel, centerX, clickY);
+
+  settingsBtnX = centerX - settingsBtnW * 0.5f;
+  settingsBtnY = height * 0.72f;
+  boolean settingsHot = settingsButtonHit(mouseX, mouseY);
+  noStroke();
+  fill(32, 18, 10, settingsHot ? 210 : 175);
+  rect(settingsBtnX, settingsBtnY, settingsBtnW, settingsBtnH, 8);
+  stroke(200, 145, 70, settingsHot ? 255 : 200);
+  strokeWeight(2);
+  noFill();
+  rect(settingsBtnX + 1, settingsBtnY + 1, settingsBtnW - 2, settingsBtnH - 2, 7);
+  noStroke();
+  textSize(20);
+  fill(255, 248, 220, settingsHot ? 255 : 230);
+  text("SETTINGS", centerX, settingsBtnY + settingsBtnH * 0.52f);
   reset2DDrawState();
+}
+
+boolean settingsButtonHit(float mx, float my) {
+  return mx >= settingsBtnX && mx <= settingsBtnX + settingsBtnW
+    && my >= settingsBtnY && my <= settingsBtnY + settingsBtnH;
+}
+
+void drawSettingsScreen() {
+  if (musicClip == null) startMenuMusic();
+  hint(DISABLE_DEPTH_TEST);
+  camera();
+  perspective();
+  noLights();
+  drawWesternMenuBgImage();
+  float cx = width * 0.5f;
+  float panelW = min(width - 48, 560);
+  float panelH = min(height - 120, 420);
+  float px = (width - panelW) * 0.5f;
+  float py = (height - panelH) * 0.5f;
+  drawWesternPanel(px, py, panelW, panelH, 14);
+  textAlign(CENTER, TOP);
+  textFont(uiFontHud);
+  fill(255, 242, 175);
+  textSize(40);
+  text("SETTINGS", cx, py + 22);
+  textSize(17);
+  fill(235, 220, 195);
+  text("Drag sliders or use ← → keys", cx, py + 68);
+
+  float barX = cx - settingsBarW * 0.5f;
+  settingsSfxBarY = py + 130;
+  settingsMusicBarY = py + 210;
+  drawVolumeSlider("SFX", settingsSfxVol, barX, settingsSfxBarY);
+  drawVolumeSlider("MUSIC", settingsMusicVol, barX, settingsMusicBarY);
+
+  textSize(15);
+  fill(210, 195, 170);
+  text("ESC — back to title", cx, py + panelH - 36);
+  reset2DDrawState();
+}
+
+void drawVolumeSlider(String label, float val, float x, float y) {
+  float safe = sanitizeVolume(val, label.equals("SFX") ? GAME_SFX_VOLUME_DEFAULT : GAME_MUSIC_VOLUME_DEFAULT);
+  textAlign(LEFT, CENTER);
+  textSize(18);
+  fill(255, 245, 220);
+  text(label, x, y - 22);
+  textAlign(RIGHT, CENTER);
+  text((int)(safe * 100 + 0.5f) + "%", x + settingsBarW, y - 22);
+  noStroke();
+  fill(28, 16, 10, 220);
+  rect(x, y, settingsBarW, settingsBarH, 6);
+  float fillW = settingsBarW * safe;
+  fill(200, 120, 45, 240);
+  rect(x, y, max(4, fillW), settingsBarH, 6);
+  stroke(220, 170, 90);
+  strokeWeight(2);
+  float knobX = x + fillW;
+  line(knobX, y - 2, knobX, y + settingsBarH + 2);
+  noStroke();
+}
+
+float volumeFromBarX(float mx, float barX) {
+  return constrain((mx - barX) / settingsBarW, 0, 1);
+}
+
+void updateSettingsFromMouse(float mx, float my) {
+  float barX = width * 0.5f - settingsBarW * 0.5f;
+  if (settingsDraggingSfx || (mx >= barX && mx <= barX + settingsBarW
+      && my >= settingsSfxBarY - 8 && my <= settingsSfxBarY + settingsBarH + 8)) {
+    settingsSfxVol = volumeFromBarX(mx, barX);
+    applyAudioVolumes();
+  }
+  if (settingsDraggingMusic || (mx >= barX && mx <= barX + settingsBarW
+      && my >= settingsMusicBarY - 8 && my <= settingsMusicBarY + settingsBarH + 8)) {
+    settingsMusicVol = volumeFromBarX(mx, barX);
+    applyAudioVolumes();
+  }
 }
 
 void drawControlsIntroScreen() {
@@ -944,7 +1296,9 @@ void drawSecondScreen(float t) {
   boolean gameplayActive = !showControlsOverlay && !finished;
   if (gameplayActive) {
     updateWaveTimers(dt);
+    updateWaveIntro(dt);
     updateMovement(dt);
+    updateStaggeredSpawns(dt);
   }
   updateDamageFlash(dt);
   persistRunIfEnded();
@@ -963,11 +1317,17 @@ void drawSecondScreen(float t) {
     updateSprintBarFocus(dt);
   }
 
-  if (gameplayActive && shooting && waveState == WAVE_STATE_FIGHT) {
+  if (gameplayActive && shooting && waveState == WAVE_STATE_FIGHT && wavePreviewTimer <= 0) {
     ArrayList<Bullet> volley = player.tryShootVolley(aimPoint);
     if (volley != null && volley.size() > 0) {
       bullets.addAll(volley);
-      muzzleFlashes.add(new MuzzleFlash(player.gunTip(), player.facing));
+      PVector tip = player.gunTip();
+      muzzleFlashes.add(new MuzzleFlash(tip, player.facing, player.weaponSlot));
+      if (player.weaponSlot == 0) addCamShake(2.8f);
+      else if (player.weaponSlot == 1) {
+        addCamShake(11f);
+        emitShotgunShells(tip, player.facing);
+      } else addCamShake(4.5f);
     }
   }
 
@@ -990,11 +1350,13 @@ void drawSecondScreen(float t) {
     updateAndDrawBullets(dt);
     updateAndDrawEnemyBullets(dt);
     updateAndDrawMuzzleFlashes(dt);
+    updateAndDrawShellCasings(dt);
     updateAndDrawHitSparks(dt);
   } else {
     for (Bullet b : bullets) b.display();
     for (EnemyBullet eb : enemyBullets) eb.display();
     for (MuzzleFlash m : muzzleFlashes) m.display();
+    for (ShellCasing sc : shellCasings) sc.display();
     for (HitSpark s : hitSparks) s.display();
   }
 
@@ -1027,8 +1389,8 @@ void drawSecondScreen(float t) {
   perspective();
   noLights();
   textFont(uiFontHud);
-  float sx = (random(-1, 1) + random(-1, 1)) * 0.5 * hurtShakePx;
-  float sy = (random(-1, 1) + random(-1, 1)) * 0.5 * hurtShakePx;
+  float sx = (random(-1, 1) + random(-1, 1)) * 0.5 * (hurtShakePx + camShakePx);
+  float sy = (random(-1, 1) + random(-1, 1)) * 0.5 * (hurtShakePx + camShakePx * 0.85f);
   drawSprintTrail2D();
   drawPlayerSprintBar2D();
   pushMatrix();
@@ -1039,6 +1401,8 @@ void drawSecondScreen(float t) {
   drawPlayerReloadBarScreen();
   drawReloadNeededFeedback(t);
   drawWaveIntermissionOverlay(t);
+  drawWaveBanner2D();
+  drawSpawnPreview2D(t);
   popMatrix();
   drawHurtFeedbackOverlay();
   drawPickupPlusFx2D();
@@ -1085,9 +1449,9 @@ boolean farEnoughFromOthers(float x, float z, ArrayList<PVector> used, float min
 /** Sector + distance spawn so wave enemies stay far from player and spread out. */
 PVector randomBanditSpawnForWave(int index, int total, int wave, ArrayList<PVector> used) {
   float spawnR = 22;
-  float minFromPlayer = 520 + wave * 35;
-  float maxFromPlayer = min(arenaHalfW, arenaHalfH) * 0.68f;
-  float minSep = 165;
+  float minFromPlayer = 600 + wave * 45;
+  float maxFromPlayer = min(arenaHalfW, arenaHalfH) * 0.78f;
+  float minSep = 190;
 
   for (int attempt = 0; attempt < 140; attempt++) {
     float sector = (index + 0.5f) / max(1, total);
@@ -1123,27 +1487,42 @@ PVector randomBanditSpawnForWave(int index, int total, int wave, ArrayList<PVect
   if (fb != null && farEnoughFromOthers(fb.x, fb.z, used, minSep * 0.7f)) return fb;
   fb = tryBanditSpawnPoint(-480, 480, spawnR);
   if (fb != null) return fb;
-  return new PVector(player.pos.x + cos(index) * minFromPlayer, 0, player.pos.z + sin(index) * minFromPlayer);
+  float fallbackAng = TWO_PI * index / max(1, total);
+  return new PVector(
+    player.pos.x + cos(fallbackAng) * minFromPlayer,
+    0,
+    player.pos.z + sin(fallbackAng) * minFromPlayer
+  );
 }
 
 void spawnWave(int w) {
   bandits.clear();
   enemyBullets.clear();
   bullets.clear();
+  pendingBanditSpawns.clear();
+  previewSpawnMarkers.clear();
   int n = 2 + w * 2;
   color[] outfits = {
     color(180, 60, 50), color(160, 100, 50), color(130, 60, 90),
     color(80, 120, 145), color(100, 80, 60)
   };
   ArrayList<PVector> usedSpawns = new ArrayList<PVector>();
+  float hpMul = 1 + 0.15 * (w - 1);
+  float spdMul = 1 + 0.1 * (w - 1);
   for (int i = 0; i < n; i++) {
     PVector p = randomBanditSpawnForWave(i, n, w, usedSpawns);
     if (circleOverlapsColliderXZ(p.x, p.z, 20)) nudgeToClearPosition(p, 20);
     usedSpawns.add(p.copy());
-    float hpMul = 1 + 0.15 * (w - 1);
-    float spdMul = 1 + 0.1 * (w - 1);
-    bandits.add(new Bandit(p.x, p.z, outfits[i % outfits.length], spdMul, hpMul, w));
+    previewSpawnMarkers.add(p.copy());
+    pendingBanditSpawns.add(new PendingBandit(
+      p.x, p.z, outfits[i % outfits.length], spdMul, hpMul, w
+    ));
   }
+  wavePreviewTimer = WAVE_PREVIEW_DURATION;
+  waveBannerTimer = WAVE_BANNER_DURATION;
+  waveBannerNumber = w;
+  waveSpawning = false;
+  staggerSpawnTimer = STAGGER_SPAWN_INTERVAL;
 }
 
 void initGame() {
@@ -1152,6 +1531,14 @@ void initGame() {
   bullets = new ArrayList<Bullet>();
   enemyBullets = new ArrayList<EnemyBullet>();
   bandits = new ArrayList<Bandit>();
+  pendingBanditSpawns.clear();
+  previewSpawnMarkers.clear();
+  waveSpawning = false;
+  wavePreviewTimer = 0;
+  waveBannerTimer = 0;
+  shellCasings.clear();
+  camShakeAmp = 0;
+  camShakePx = 0;
   muzzleFlashes = new ArrayList<MuzzleFlash>();
   hitSparks = new ArrayList<HitSpark>();
   if (lootPickups == null) lootPickups = new ArrayList<LootPickup>();
@@ -1341,7 +1728,11 @@ void setAngledCamera() {
   camTargetX = player.pos.x;
   camTargetY = -30;
   camTargetZ = player.pos.z;
-  camera(camPosX, camPosY, camPosZ, camTargetX, camTargetY, camTargetZ, 0, 1, 0);
+  float shX = (random(-1, 1) + random(-1, 1)) * 0.5f * (camShakePx + hurtShakePx * 0.75f);
+  float shY = (random(-1, 1) + random(-1, 1)) * 0.5f * (camShakePx * 0.55f + hurtShakePx * 0.45f);
+  float shZ = (random(-1, 1) + random(-1, 1)) * 0.5f * camShakePx * 0.4f;
+  camera(camPosX + shX, camPosY + shY, camPosZ + shZ,
+    camTargetX + shX * 0.35f, camTargetY, camTargetZ + shZ * 0.35f, 0, 1, 0);
   perspective(PI / 3.0, float(width) / float(height), 1, 6000);
 
   camForward.set(camTargetX - camPosX, camTargetY - camPosY, camTargetZ - camPosZ);
@@ -1381,7 +1772,27 @@ PVector groundFromMouse(float mx, float my) {
 
 void mousePressed() {
   if (gameFlow == FLOW_TITLE) {
+    if (settingsButtonHit(mouseX, mouseY)) {
+      gameFlow = FLOW_SETTINGS;
+      return;
+    }
     gameFlow = FLOW_CONTROLS;
+    return;
+  }
+  if (gameFlow == FLOW_SETTINGS) {
+    float barX = width * 0.5f - settingsBarW * 0.5f;
+    if (mouseY >= settingsSfxBarY - 10 && mouseY <= settingsSfxBarY + settingsBarH + 10
+        && mouseX >= barX - 8 && mouseX <= barX + settingsBarW + 8) {
+      settingsDraggingSfx = true;
+      settingsSfxVol = volumeFromBarX(mouseX, barX);
+      applyAudioVolumes();
+    }
+    if (mouseY >= settingsMusicBarY - 10 && mouseY <= settingsMusicBarY + settingsBarH + 10
+        && mouseX >= barX - 8 && mouseX <= barX + settingsBarW + 8) {
+      settingsDraggingMusic = true;
+      settingsMusicVol = volumeFromBarX(mouseX, barX);
+      applyAudioVolumes();
+    }
     return;
   }
   if (gameFlow == FLOW_CONTROLS) {
@@ -1404,9 +1815,18 @@ void mousePressed() {
 
 void mouseReleased() {
   if (mouseButton == LEFT) shooting = false;
+  if (settingsDraggingSfx || settingsDraggingMusic) {
+    settingsDraggingSfx = false;
+    settingsDraggingMusic = false;
+    saveProgression();
+  }
 }
 
 void mouseDragged() {
+  if (gameFlow == FLOW_SETTINGS) {
+    updateSettingsFromMouse(mouseX, mouseY);
+    return;
+  }
   if (mouseButton == RIGHT) {
     float dx = mouseX - pmouseX;
     float dy = mouseY - pmouseY;
@@ -1423,6 +1843,27 @@ void mouseWheel(MouseEvent e) {
 }
 
 void keyPressed() {
+  if (gameFlow == FLOW_SETTINGS) {
+    if (key == ESC || keyCode == ESC) {
+      key = 0;
+      gameFlow = FLOW_TITLE;
+      saveProgression();
+      return;
+    }
+    float step = 0.04f;
+    if (keyCode == LEFT) {
+      if (keyEvent.isShiftDown()) settingsMusicVol = max(0, settingsMusicVol - step);
+      else settingsSfxVol = max(0, settingsSfxVol - step);
+      applyAudioVolumes();
+      return;
+    }
+    if (keyCode == RIGHT) {
+      if (keyEvent.isShiftDown()) settingsMusicVol = min(1, settingsMusicVol + step);
+      else settingsSfxVol = min(1, settingsSfxVol + step);
+      applyAudioVolumes();
+      return;
+    }
+  }
   if (key == 'w' || key == 'W') moveW = true;
   if (key == 'a' || key == 'A') moveA = true;
   if (key == 's' || key == 'S') moveS = true;
@@ -1488,12 +1929,14 @@ void updateGameState(float t) {
   }
 
   if (waveState != WAVE_STATE_FIGHT) return;
+  if (wavePreviewTimer > 0) return;
+  if (waveSpawning || pendingBanditSpawns.size() > 0) return;
 
   int aliveCount = 0;
   for (Bandit b : bandits) {
     if (b.alive) aliveCount++;
   }
-  if (bandits.size() > 0 && aliveCount == 0) {
+  if (aliveCount == 0 && bandits.size() > 0) {
     if (currentWave == maxWaves) {
       finished = true;
       gameStateText = "YOU WIN";
@@ -1852,6 +2295,61 @@ void drawReloadNeededFeedback(float gameT) {
   textSize(13);
   fill(255, 220, 180, 220);
   text("You cannot fire until you reload.", width * 0.5, by + bh - 14);
+}
+
+void drawSpawnPreview2D(float t) {
+  if (wavePreviewTimer <= 0) return;
+  textFont(uiFontHud);
+  textAlign(CENTER, TOP);
+  textSize(22);
+  fill(0, 0, 0, 160);
+  text("INCOMING  ·  " + str(max(1, (int)ceil(wavePreviewTimer))) + "s",
+    width * 0.5f + 2, height * 0.12f + 2);
+  fill(255, 220, 170, 235);
+  text("INCOMING  ·  " + str(max(1, (int)ceil(wavePreviewTimer))) + "s", width * 0.5f, height * 0.12f);
+}
+
+void drawWaveBanner2D() {
+  if (waveBannerTimer <= 0) return;
+  float u = constrain(waveBannerTimer / WAVE_BANNER_DURATION, 0, 1);
+  float enter = min(1, (1 - u) * 5.5f);
+  float exitFade = u < 0.2f ? u / 0.2f : 1;
+  int alpha = (int)(255 * enter * exitFade);
+  if (alpha < 4) return;
+  textFont(uiFontHud);
+  float cx = width * 0.5f;
+  float cy = height * 0.34f;
+  float scale = 1.0f + 0.12f * sin((1 - u) * PI);
+  pushMatrix();
+  translate(cx, cy);
+  scale(scale);
+  textAlign(CENTER, CENTER);
+  textSize(72);
+  fill(0, 0, 0, alpha / 2);
+  text("WAVE " + waveBannerNumber, 4, 6);
+  fill(255, 215, 120, alpha);
+  text("WAVE " + waveBannerNumber, 0, 0);
+  if (waveBannerTimer > WAVE_BANNER_DURATION * 0.45f) {
+    textSize(36);
+    fill(0, 0, 0, alpha / 2);
+    text("DRAW!", 3, 58);
+    fill(255, 80, 60, alpha);
+    text("DRAW!", 0, 52);
+  }
+  popMatrix();
+  noStroke();
+  float barW = min(420, width * 0.55f);
+  fill(120, 40, 30, alpha / 3);
+  rect(cx - barW * 0.5f, cy + 72, barW, 4, 2);
+}
+
+void updateAndDrawShellCasings(float dt) {
+  for (int i = shellCasings.size() - 1; i >= 0; i--) {
+    ShellCasing sc = shellCasings.get(i);
+    sc.update(dt);
+    sc.display();
+    if (sc.life <= 0) shellCasings.remove(i);
+  }
 }
 
 /** Wave break: top bar + frame. */
