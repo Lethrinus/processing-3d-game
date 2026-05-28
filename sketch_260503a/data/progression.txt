@@ -1,4 +1,5 @@
 highScore=9002
-totalKills=322
-sfxVolume=0.425
-musicVolume=0.997
+totalKills=330
+sfxVolume=0.122
+musicVolume=0.128
+fullscreen=1

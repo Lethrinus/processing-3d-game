@@ -19,24 +19,51 @@ import java.util.Locale;
 import java.io.File;
 import javax.sound.sampled.Clip;
 
+/** Rio Grande — titles, banners, ALL CAPS labels. */
 PFont uiFontHud;
+/** Mixed-case UI — data/fonts/Sancreek-Regular.ttf (small text). */
+PFont uiFontBody;
 
-/** Serif / western-style UI font from installed families; falls back to Serif. */
+/** Resolves a font under data/fonts/ with legacy data/ root fallback. */
+String resolveFontPath(String fileName) {
+  String inFonts = "fonts/" + fileName;
+  if (new File(dataPath(inFonts)).exists()) return inFonts;
+  if (new File(dataPath(fileName)).exists()) return fileName;
+  return null;
+}
+
 PFont createWesternHudFont() {
-  String[] preferred = {
-    "Rockwell-Bold", "Rockwell Bold", "Rockwell",
-    "Copperplate Gothic Bold", "Copperplate Gothic",
-    "Book Antiqua", "Bookman Old Style",
-    "Georgia-Bold", "Georgia Bold", "Georgia",
-    "Times New Roman", "TimesNewRomanPSMT", "Palatino Linotype", "Serif"
+  String path = resolveFontPath("RioGrande.ttf");
+  if (path != null) return createFont(path, 72, true);
+  return createFont("Serif", 72, true);
+}
+
+PFont createUiBodyFont() {
+  String[] dataFiles = {
+    "Sancreek-Regular.ttf", "sancreek-regular.ttf",
+    "Sancreek-Regular.otf", "sancreek-regular.otf",
+    "ui-body.ttf", "UI-Body.ttf"
   };
+  for (String name : dataFiles) {
+    String path = resolveFontPath(name);
+    if (path != null) return createFont(path, 14, true);
+  }
+  String[] preferred = {"Arial", "Helvetica Neue", "Helvetica", "Verdana", "SansSerif", "Dialog"};
   String[] avail = PFont.list();
   for (String w : preferred) {
     for (String f : avail) {
-      if (f.equalsIgnoreCase(w)) return createFont(f, 72, true);
+      if (f.equalsIgnoreCase(w)) return createFont(f, 48, true);
     }
   }
-  return createFont("Serif", 72, true);
+  return createFont("SansSerif", 48, true);
+}
+
+void textFontDisplay() {
+  textFont(uiFontHud);
+}
+
+void textFontBody() {
+  textFont(uiFontBody);
 }
 
 int sceneStartMs;
@@ -80,7 +107,7 @@ boolean runStatsPersisted = false;
 
 int kills;
 int score;
-float gameDurationSec = 200.0;
+float gameDurationSec = 240.0;
 /** Bonus time earned between waves. */
 float extraTimeSec = 0;
 
@@ -90,10 +117,35 @@ int waveState = WAVE_STATE_FIGHT;
 float waveBreakTimer = 0;
 final float WAVE_BREAK_DURATION = 8.0;
 int currentWave = 1;
-int maxWaves = 5;
+int maxWaves = 9;
+
+final int GAME_MODE_STORY = 0;
+final int GAME_MODE_ENDLESS = 1;
+final int STORY_MAX_WAVES = 9;
+final int UNLOCK_SHOTGUN_WAVE = 3;
+final int UNLOCK_REPEATER_WAVE = 6;
+
+final int BANDIT_WPN_REVOLVER = 0;
+final int BANDIT_WPN_SHOTGUN = 1;
+final int BANDIT_WPN_REPEATER = 2;
+
+int selectedGameMode = GAME_MODE_STORY;
+boolean endlessMode = false;
+boolean gamePaused = false;
+long gamePauseAccumMs = 0;
+int gamePauseStartMs = 0;
+boolean menuMusicStarted = false;
+
+float storyBtnX, storyBtnY, storyBtnW = 300, storyBtnH = 50;
+float endlessBtnX, endlessBtnY;
+float pauseContinueBtnX, pauseContinueBtnY, pauseMenuBtnX, pauseMenuBtnY;
+final float pauseBtnW = 260, pauseBtnH = 46;
+
+float weaponUnlockBannerTimer = 0;
+String weaponUnlockBannerText = "";
 
 /** Staggered wave spawns — one bandit every STAGGER_SPAWN_INTERVAL sec. */
-final float STAGGER_SPAWN_INTERVAL = 0.72f;
+final float STAGGER_SPAWN_INTERVAL = 0.82f;
 ArrayList<PendingBandit> pendingBanditSpawns = new ArrayList<PendingBandit>();
 boolean waveSpawning = false;
 float staggerSpawnTimer = 0;
@@ -121,6 +173,20 @@ float[] pathDirCost = {1, 1, 1, 1, 1.414f, 1.414f, 1.414f, 1.414f};
 PImage texBarrel, texRoof, texGround, texCactus;
 /** Optional UI sprites in data/ui/ — game draws text buttons if missing. */
 PImage uiBtnControls, uiBtnControlsHot;
+/** Controls overlay — key/mouse icons in data/controls/ (or data/ui/controls/). */
+ControlPanelRow[] controlPanelRows;
+final int CTRL_LAYOUT_ROW = 0;
+final int CTRL_LAYOUT_WASD = 1;
+final int CTRL_GRID_COLS = 4;
+
+class ControlPanelRow {
+  String title;
+  /** Drawn with Sancreek (uiFontBody). */
+  String[] keyLabels;
+  /** mouse_*.png only */
+  PImage[] mouseIcons;
+  int layout = CTRL_LAYOUT_ROW;
+}
 /** Menu UI — data/ui/ */
 PImage uiWesternBg;
 Clip musicClip;
@@ -130,6 +196,12 @@ final float GAME_SFX_VOLUME_DEFAULT = 0.22f;
 final float GAME_MUSIC_VOLUME_DEFAULT = 0.16f;
 float settingsSfxVol = GAME_SFX_VOLUME_DEFAULT;
 float settingsMusicVol = GAME_MUSIC_VOLUME_DEFAULT;
+final int WINDOWED_W = 1280;
+final int WINDOWED_H = 720;
+boolean settingsFullscreen = true;
+/** -1 none, 0 windowed resize, 1 borderless fill — next frame (no native setFullscreen). */
+int pendingDisplayMode = -1;
+float settingsDisplayBtnX, settingsDisplayBtnY, settingsDisplayBtnW = 300, settingsDisplayBtnH = 40;
 
 /** WESTERN BOUNTY — harflerden geçen dalga */
 final int TITLE_FONT_SIZE = 62;
@@ -164,7 +236,8 @@ float settingsSfxBarY, settingsMusicBarY, settingsBarW = 320, settingsBarH = 22;
 boolean settingsDraggingSfx = false;
 boolean settingsDraggingMusic = false;
 boolean showControlsOverlay = false;
-float controlsBtnX, controlsBtnY, controlsBtnW = 108, controlsBtnH = 30;
+final float HUD_LEFT_PANEL_W = 310;
+float controlsBtnX = 340, controlsBtnY = 12, controlsBtnW = 96, controlsBtnH = 26;
 
 String gameStateText = "";
 boolean finished = false;
@@ -189,23 +262,49 @@ PVector aimPoint = new PVector(0, 0, 0);
 /** Axis-aligned colliders in XZ: minX, maxX, minZ, maxZ (world space, y ignored). */
 ArrayList<float[]> sceneColliders = new ArrayList<float[]>();
 
-/** fullScreen/size must run here (not in setup) — see Processing fullScreen() docs. */
 void settings() {
-  fullScreen(P3D, 1);
+  if (readFullscreenPref()) fullScreen(P3D, 1);
+  else size(WINDOWED_W, WINDOWED_H, P3D);
+}
+
+boolean readFullscreenPref() {
+  String[] raw = loadStrings("progression.txt");
+  if (raw == null) return true;
+  for (int i = 0; i < raw.length; i++) {
+    if (raw[i] == null) continue;
+    String line = raw[i].trim();
+    int eq = line.indexOf('=');
+    if (eq < 1) continue;
+    if (!line.substring(0, eq).trim().equals("fullscreen")) continue;
+    String v = line.substring(eq + 1).trim().toLowerCase(Locale.ROOT);
+    return v.equals("1") || v.equals("true") || v.equals("yes");
+  }
+  return true;
 }
 
 void setup() {
   sceneStartMs = millis();
   uiFontHud = createWesternHudFont();
-  textFont(uiFontHud);
+  uiFontBody = createUiBodyFont();
+  textFontBody();
   sphereDetail(18);
   buildSceneColliders();
   loadTextureAssets();
   loadUiAssets();
+  loadControlPanelAssets();
   loadProgression();
   applyAudioVolumes();
+  surface.setResizable(true);
+  syncDisplayModeToPreference();
   gameFlow = FLOW_TITLE;
-  startMenuMusic();
+}
+
+void syncDisplayModeToPreference() {
+  if (settingsFullscreen) {
+    if (width < displayWidth - 8 || height < displayHeight - 8) pendingDisplayMode = 1;
+  } else if (width > WINDOWED_W + 8 || height > WINDOWED_H + 8) {
+    pendingDisplayMode = 0;
+  }
 }
 
 PImage tryLoadImage(String relPath) {
@@ -278,6 +377,83 @@ void loadUiAssets() {
   if (uiBtnControlsHot == null) uiBtnControlsHot = uiBtnControls;
 }
 
+PImage tryLoadControlMouseIcon(String fileName) {
+  PImage img = tryLoadImage("controls/" + fileName);
+  if (img != null) return img;
+  return tryLoadImage("ui/controls/" + fileName);
+}
+
+PImage[] loadControlMouseIcons(String[] files) {
+  if (files == null || files.length == 0) return new PImage[0];
+  ArrayList<PImage> list = new ArrayList<PImage>();
+  for (String f : files) {
+    if (f == null || f.length() == 0) continue;
+    PImage img = tryLoadControlMouseIcon(f);
+    if (img != null) list.add(img);
+  }
+  return list.toArray(new PImage[0]);
+}
+
+void loadControlPanelAssets() {
+  Object[][] defs = {
+    {CTRL_LAYOUT_WASD, "Move", new String[] {"W", "A", "S", "D"}, null},
+    {CTRL_LAYOUT_ROW, "Shoot", null, new String[] {"mouse_left.png"}},
+    {CTRL_LAYOUT_ROW, "Camera", null, new String[] {"mouse_right.png"}},
+    {CTRL_LAYOUT_ROW, "Zoom", null, new String[] {"mouse_scroll.png"}},
+    {CTRL_LAYOUT_ROW, "Weapons", new String[] {"1", "2", "3"}, null},
+    {CTRL_LAYOUT_ROW, "Reload", new String[] {"R"}, null},
+    {CTRL_LAYOUT_ROW, "Sprint", new String[] {"Shift"}, null},
+    {CTRL_LAYOUT_ROW, "Wave skip", new String[] {"Space"}, null},
+    {CTRL_LAYOUT_ROW, "Pause", new String[] {"Esc"}, null},
+    {CTRL_LAYOUT_ROW, "Test", new String[] {"T"}, null},
+    {CTRL_LAYOUT_ROW, "Quit", new String[] {"Q"}, null}
+  };
+  controlPanelRows = new ControlPanelRow[defs.length];
+  for (int i = 0; i < defs.length; i++) {
+    ControlPanelRow row = new ControlPanelRow();
+    row.layout = (Integer) defs[i][0];
+    row.title = (String) defs[i][1];
+    row.keyLabels = (String[]) defs[i][2];
+    row.mouseIcons = loadControlMouseIcons((String[]) defs[i][3]);
+    controlPanelRows[i] = row;
+  }
+}
+
+float controlKeyWidth(String label, float baseSize) {
+  if (label == null || label.length() == 0) return baseSize;
+  if (label.length() == 1) return baseSize;
+  if (label.equals("Shift")) return baseSize * 1.75f;
+  if (label.equals("Space")) return baseSize * 2.35f;
+  if (label.equals("Esc")) return baseSize * 1.2f;
+  return baseSize * max(1.15f, 0.45f * label.length() + 0.55f);
+}
+
+float controlCellIconBlockW(ControlPanelRow row, float keySize, float mouseSize, float iconGap) {
+  if (row.layout == CTRL_LAYOUT_WASD && row.keyLabels != null && row.keyLabels.length >= 4) {
+    return keySize * 3 + iconGap * 2;
+  }
+  if (row.keyLabels != null && row.keyLabels.length > 0) {
+    float w = 0;
+    for (int i = 0; i < row.keyLabels.length; i++) {
+      w += controlKeyWidth(row.keyLabels[i], keySize);
+      if (i > 0) w += iconGap;
+    }
+    return w;
+  }
+  if (row.mouseIcons != null && row.mouseIcons.length > 0) {
+    return row.mouseIcons.length * mouseSize + max(0, row.mouseIcons.length - 1) * iconGap;
+  }
+  return 0;
+}
+
+float controlCellIconBlockH(ControlPanelRow row, float keySize, float mouseSize, float iconGap) {
+  if (row.layout == CTRL_LAYOUT_WASD && row.keyLabels != null && row.keyLabels.length >= 4) {
+    return keySize * 2 + iconGap;
+  }
+  if (row.mouseIcons != null && row.mouseIcons.length > 0) return mouseSize;
+  return keySize;
+}
+
 /** Draw a UI button image or a simple western-style fallback rect. */
 void drawUiButton(PImage img, PImage imgHot, float x, float y, float w, float h, boolean hot) {
   rectMode(CORNER);
@@ -300,6 +476,7 @@ void drawUiButton(PImage img, PImage imgHot, float x, float y, float w, float h,
 
 /** Tries each filename under data/sounds/ (WAV and MP3). */
 void playSoundSafe(String... names) {
+  if (SoundHelper.sfxVolume <= 0.0001f) return;
   for (String name : names) {
     File f = new File(dataPath("sounds/" + name));
     if (f.exists()) {
@@ -324,6 +501,10 @@ void playWavSafe(String name) {
 /** Loot pickup — reload sesi değil; data/sounds/pickup.wav varsa onu çalar. */
 void playPickupSound() {
   playSoundSafe("pickup.wav", "loot.wav");
+}
+
+void playUiClick() {
+  playSoundSafe("ui_click.wav");
 }
 
 String firstSoundPath(String... names) {
@@ -378,6 +559,10 @@ void loadProgression() {
       if (v.equalsIgnoreCase("nan") || v.indexOf(',') >= 0) repairVolumes = true;
       settingsMusicVol = parseVolumeSetting(v, GAME_MUSIC_VOLUME_DEFAULT);
     }
+    if (k.equals("fullscreen")) {
+      String vl = v.toLowerCase(Locale.ROOT);
+      settingsFullscreen = vl.equals("1") || vl.equals("true") || vl.equals("yes");
+    }
   }
   settingsSfxVol = sanitizeVolume(settingsSfxVol, GAME_SFX_VOLUME_DEFAULT);
   settingsMusicVol = sanitizeVolume(settingsMusicVol, GAME_MUSIC_VOLUME_DEFAULT);
@@ -391,15 +576,71 @@ void saveProgression() {
     "highScore=" + progressionHighScore,
     "totalKills=" + progressionTotalKills,
     "sfxVolume=" + formatVolumeFile(settingsSfxVol),
-    "musicVolume=" + formatVolumeFile(settingsMusicVol)
+    "musicVolume=" + formatVolumeFile(settingsMusicVol),
+    "fullscreen=" + (settingsFullscreen ? "1" : "0")
   });
 }
+
+void centerSketchWindow() {
+  surface.setLocation(max(0, (displayWidth - WINDOWED_W) / 2), max(0, (displayHeight - WINDOWED_H) / 2));
+}
+
+void processPendingDisplayMode() {
+  if (pendingDisplayMode < 0) return;
+  boolean wantFs = pendingDisplayMode == 1;
+  pendingDisplayMode = -1;
+  if (wantFs) {
+    surface.setSize(displayWidth, displayHeight);
+    surface.setLocation(0, 0);
+  } else {
+    surface.setSize(WINDOWED_W, WINDOWED_H);
+    centerSketchWindow();
+  }
+}
+
+void applyDisplayMode(boolean fullscreen) {
+  settingsFullscreen = fullscreen;
+  pendingDisplayMode = fullscreen ? 1 : 0;
+  saveProgression();
+}
+
+boolean displayModeButtonHit(float mx, float my) {
+  return mx >= settingsDisplayBtnX && mx <= settingsDisplayBtnX + settingsDisplayBtnW
+    && my >= settingsDisplayBtnY && my <= settingsDisplayBtnY + settingsDisplayBtnH;
+}
+
+int lastSfxPreviewMs = 0;
 
 void applyAudioVolumes() {
   settingsSfxVol = sanitizeVolume(settingsSfxVol, GAME_SFX_VOLUME_DEFAULT);
   settingsMusicVol = sanitizeVolume(settingsMusicVol, GAME_MUSIC_VOLUME_DEFAULT);
   SoundHelper.sfxVolume = settingsSfxVol;
   SoundHelper.musicVolume = settingsMusicVol;
+  if (musicClip != null) {
+    if (settingsMusicVol <= 0.0001f) stopMusic();
+    else SoundHelper.setClipVolume(musicClip, settingsMusicVol);
+  } else if (settingsMusicVol > 0.0001f && menuMusicStarted
+      && (gameFlow == FLOW_TITLE || gameFlow == FLOW_CONTROLS || gameFlow == FLOW_SETTINGS)) {
+    startMenuMusic();
+  }
+}
+
+void ensureMenuMusic() {
+  if (menuMusicStarted) return;
+  menuMusicStarted = true;
+  applyAudioVolumes();
+  if (settingsMusicVol > 0.0001f
+      && (gameFlow == FLOW_TITLE || gameFlow == FLOW_CONTROLS || gameFlow == FLOW_SETTINGS)) {
+    startMenuMusic();
+  }
+}
+
+void maybePreviewSfxVolume() {
+  if (SoundHelper.sfxVolume <= 0.0001f) return;
+  int now = millis();
+  if (now - lastSfxPreviewMs < 140) return;
+  lastSfxPreviewMs = now;
+  playSoundSafe("pickup.wav", "gun_player.wav");
 }
 
 void persistRunIfEnded() {
@@ -451,7 +692,7 @@ void beginStaggeredSpawnsFromPending() {
     return;
   }
   PendingBandit first = pendingBanditSpawns.remove(0);
-  bandits.add(new Bandit(first.x, first.z, first.outfit, first.spdMul, first.hpMul, first.wave));
+  bandits.add(new Bandit(first.x, first.z, first.outfit, first.spdMul, first.hpMul, first.wave, first.weaponType));
   waveSpawning = pendingBanditSpawns.size() > 0;
   staggerSpawnTimer = STAGGER_SPAWN_INTERVAL;
 }
@@ -459,7 +700,7 @@ void beginStaggeredSpawnsFromPending() {
 /** Spawn ground loot after a kill (called from sketch bullet loop only). */
 void registerBanditLootDrop(float x, float z) {
   if (lootPickups == null) lootPickups = new ArrayList<LootPickup>();
-  int lk = (int)random(3);
+  int lk = random(1) < 0.45 ? LootPickup.LOOT_HEALTH : LootPickup.LOOT_AMMO;
   lootPickups.add(new LootPickup(x + random(-6, 6), z + random(-6, 6), lk));
 }
 
@@ -592,9 +833,8 @@ class PickupPlusFx {
     pushStyle();
     blendMode(BLEND);
     textAlign(CENTER, CENTER);
-    int c = color(255, 224, 105);
-    if (kind == 1) c = color(115, 255, 155);
-    if (kind == 2) c = color(255, 175, 85);
+    int c = color(115, 255, 155);
+    if (kind == LootPickup.LOOT_AMMO) c = color(255, 175, 85);
     float pulse = 1 + 0.14 * sin(age * 26 + sx * 0.05);
     textSize(24 * pulse);
     fill(0, a * 0.5);
@@ -711,11 +951,13 @@ void drawTitleMexicanWave(String title, float cx, float cy, int fontSize) {
 
 /** High score + credits on title / controls menus. */
 void drawMenuExtras(float centerX) {
+  textFontBody();
   textAlign(CENTER, CENTER);
   if (progressionHighScore > 0 || progressionTotalKills > 0) {
     textSize(MENU_SCORE_SIZE);
     fill(255, 248, 210);
-    text("★ Best bounty: " + progressionHighScore + "   Outlaws: " + progressionTotalKills, centerX, height * 0.52f);
+    text("★ Best score: " + progressionHighScore + "   Lifetime kills: " + progressionTotalKills,
+      centerX, height * 0.52f);
   }
   textSize(MENU_CREDITS_SIZE);
   fill(245, 235, 210);
@@ -895,7 +1137,7 @@ void updateStaggeredSpawns(float dt) {
   if (staggerSpawnTimer > 0) return;
   staggerSpawnTimer = STAGGER_SPAWN_INTERVAL;
   PendingBandit e = pendingBanditSpawns.remove(0);
-  bandits.add(new Bandit(e.x, e.z, e.outfit, e.spdMul, e.hpMul, e.wave));
+  bandits.add(new Bandit(e.x, e.z, e.outfit, e.spdMul, e.hpMul, e.wave, e.weaponType));
   if (pendingBanditSpawns.size() == 0) waveSpawning = false;
 }
 
@@ -1023,6 +1265,8 @@ void unstuckBandit(Bandit b, Player player) {
 }
 
 void draw() {
+  processPendingDisplayMode();
+  ensureMenuMusic();
   if (gameFlow == FLOW_TITLE) {
     drawTitleScreen();
     return;
@@ -1035,8 +1279,30 @@ void draw() {
     drawControlsIntroScreen();
     return;
   }
-  float elapsed = (millis() - sceneStartMs) / 1000.0;
-  drawSecondScreen(elapsed);
+  updatePauseClock();
+  drawSecondScreen(gameElapsedSec());
+}
+
+void updatePauseClock() {
+  if (gamePaused && gamePauseStartMs == 0) gamePauseStartMs = millis();
+  if (!gamePaused && gamePauseStartMs > 0) {
+    gamePauseAccumMs += millis() - gamePauseStartMs;
+    gamePauseStartMs = 0;
+  }
+}
+
+float gameElapsedSec() {
+  long paused = gamePauseAccumMs;
+  if (gamePaused && gamePauseStartMs > 0) paused += millis() - gamePauseStartMs;
+  return max(0, (millis() - sceneStartMs - paused) / 1000.0f);
+}
+
+void setGamePaused(boolean paused) {
+  if (paused == gamePaused) return;
+  updatePauseClock();
+  gamePaused = paused;
+  updatePauseClock();
+  if (gamePaused) shooting = false;
 }
 
 void beginPlaySession() {
@@ -1045,6 +1311,7 @@ void beginPlaySession() {
   sceneStartMs = millis();
   gameFlow = FLOW_PLAY;
   showControlsOverlay = false;
+  gamePaused = false;
   shooting = false;
 }
 
@@ -1075,32 +1342,31 @@ void drawTitleScreen() {
   drawWesternMenuBgImage();
   hint(ENABLE_DEPTH_TEST);
 
-  textFont(uiFontHud);
+  float centerX = width * 0.5f;
+  textFontDisplay();
   textAlign(CENTER, CENTER);
   String title = "MAN WITH NO NAME";
   float titleY = height * 0.38f;
-  float centerX = width * 0.5f;
   drawTitleMexicanWave(title, centerX, titleY, TITLE_FONT_SIZE);
 
+  textFontBody();
   textAlign(CENTER, CENTER);
   textSize(MENU_SUBTITLE_SIZE);
   fill(255, 248, 225);
   text("SEN3301 — 3D Arena Shootout", centerX, height * 0.46);
   drawMenuExtras(centerX);
 
-  float clickY = height * 0.62f;
-  float blink = 0.5f + 0.5f * sin(millis() * CLICK_BLINK_SPEED);
-  int clickA = (int)lerp(CLICK_ALPHA_MIN, CLICK_ALPHA_MAX, blink);
-  String clickLabel = "Click to play";
-  textAlign(CENTER, CENTER);
-  textSize(MENU_CLICK_SIZE);
-  fill(0, 0, 0, min(255, clickA));
-  text(clickLabel, centerX + 2, clickY + 2);
-  fill(255, 252, 235, clickA);
-  text(clickLabel, centerX, clickY);
+  storyBtnX = centerX - storyBtnW * 0.5f;
+  storyBtnY = height * 0.56f;
+  endlessBtnX = storyBtnX;
+  endlessBtnY = height * 0.64f;
+  boolean storyHot = titleModeButtonHit(mouseX, mouseY, storyBtnX, storyBtnY);
+  boolean endlessHot = titleModeButtonHit(mouseX, mouseY, endlessBtnX, endlessBtnY);
+  drawTitleModeButton(storyBtnX, storyBtnY, storyBtnW, storyBtnH, "BOUNTY RUN", "9 waves · win the frontier", storyHot);
+  drawTitleModeButton(endlessBtnX, endlessBtnY, storyBtnW, storyBtnH, "ENDLESS", "Rising difficulty · no final wave", endlessHot);
 
   settingsBtnX = centerX - settingsBtnW * 0.5f;
-  settingsBtnY = height * 0.72f;
+  settingsBtnY = height * 0.74f;
   boolean settingsHot = settingsButtonHit(mouseX, mouseY);
   noStroke();
   fill(32, 18, 10, settingsHot ? 210 : 175);
@@ -1110,6 +1376,7 @@ void drawTitleScreen() {
   noFill();
   rect(settingsBtnX + 1, settingsBtnY + 1, settingsBtnW - 2, settingsBtnH - 2, 7);
   noStroke();
+  textFontDisplay();
   textSize(20);
   fill(255, 248, 220, settingsHot ? 255 : 230);
   text("SETTINGS", centerX, settingsBtnY + settingsBtnH * 0.52f);
@@ -1121,6 +1388,30 @@ boolean settingsButtonHit(float mx, float my) {
     && my >= settingsBtnY && my <= settingsBtnY + settingsBtnH;
 }
 
+boolean titleModeButtonHit(float mx, float my, float bx, float by) {
+  return mx >= bx && mx <= bx + storyBtnW && my >= by && my <= by + storyBtnH;
+}
+
+void drawTitleModeButton(float bx, float by, float bw, float bh, String title, String sub, boolean hot) {
+  noStroke();
+  fill(32, 18, 10, hot ? 225 : 185);
+  rect(bx, by, bw, bh, 10);
+  stroke(200, 145, 70, hot ? 255 : 200);
+  strokeWeight(2);
+  noFill();
+  rect(bx + 1, by + 1, bw - 2, bh - 2, 9);
+  noStroke();
+  textAlign(CENTER, CENTER);
+  textFontDisplay();
+  textSize(24);
+  fill(255, 248, 220, hot ? 255 : 235);
+  text(title, bx + bw * 0.5f, by + bh * 0.38f);
+  textFontBody();
+  textSize(14);
+  fill(210, 195, 170, hot ? 255 : 220);
+  text(sub, bx + bw * 0.5f, by + bh * 0.72f);
+}
+
 void drawSettingsScreen() {
   if (musicClip == null) startMenuMusic();
   hint(DISABLE_DEPTH_TEST);
@@ -1130,24 +1421,44 @@ void drawSettingsScreen() {
   drawWesternMenuBgImage();
   float cx = width * 0.5f;
   float panelW = min(width - 48, 560);
-  float panelH = min(height - 120, 420);
+  float panelH = min(height - 100, 420);
   float px = (width - panelW) * 0.5f;
   float py = (height - panelH) * 0.5f;
   drawWesternPanel(px, py, panelW, panelH, 14);
   textAlign(CENTER, TOP);
-  textFont(uiFontHud);
+  textFontDisplay();
   fill(255, 242, 175);
   textSize(40);
   text("SETTINGS", cx, py + 22);
+  textFontBody();
   textSize(17);
   fill(235, 220, 195);
-  text("Drag sliders or use ← → keys", cx, py + 68);
+  text("Drag sliders", cx, py + 68);
 
   float barX = cx - settingsBarW * 0.5f;
-  settingsSfxBarY = py + 130;
-  settingsMusicBarY = py + 210;
+  settingsSfxBarY = py + 118;
+  settingsMusicBarY = py + 188;
   drawVolumeSlider("SFX", settingsSfxVol, barX, settingsSfxBarY);
   drawVolumeSlider("MUSIC", settingsMusicVol, barX, settingsMusicBarY);
+
+  settingsDisplayBtnX = cx - settingsDisplayBtnW * 0.5f;
+  settingsDisplayBtnY = py + 258;
+  boolean displayHot = displayModeButtonHit(mouseX, mouseY);
+  noStroke();
+  fill(32, 18, 10, displayHot ? 225 : 185);
+  rect(settingsDisplayBtnX, settingsDisplayBtnY, settingsDisplayBtnW, settingsDisplayBtnH, 8);
+  stroke(200, 145, 70, displayHot ? 255 : 200);
+  strokeWeight(2);
+  noFill();
+  rect(settingsDisplayBtnX + 1, settingsDisplayBtnY + 1, settingsDisplayBtnW - 2, settingsDisplayBtnH - 2, 7);
+  noStroke();
+  textFontBody();
+  textAlign(CENTER, CENTER);
+  textSize(17);
+  fill(255, 248, 220, displayHot ? 255 : 230);
+  String modeLabel = settingsFullscreen ? "FULLSCREEN" : "WINDOWED 1280×720";
+  text(modeLabel, cx, settingsDisplayBtnY + settingsDisplayBtnH * 0.5f);
+  textAlign(CENTER, TOP);
 
   textSize(15);
   fill(210, 195, 170);
@@ -1156,6 +1467,7 @@ void drawSettingsScreen() {
 }
 
 void drawVolumeSlider(String label, float val, float x, float y) {
+  textFontBody();
   float safe = sanitizeVolume(val, label.equals("SFX") ? GAME_SFX_VOLUME_DEFAULT : GAME_MUSIC_VOLUME_DEFAULT);
   textAlign(LEFT, CENTER);
   textSize(18);
@@ -1186,6 +1498,7 @@ void updateSettingsFromMouse(float mx, float my) {
       && my >= settingsSfxBarY - 8 && my <= settingsSfxBarY + settingsBarH + 8)) {
     settingsSfxVol = volumeFromBarX(mx, barX);
     applyAudioVolumes();
+    if (settingsDraggingSfx) maybePreviewSfxVolume();
   }
   if (settingsDraggingMusic || (mx >= barX && mx <= barX + settingsBarW
       && my >= settingsMusicBarY - 8 && my <= settingsMusicBarY + settingsBarH + 8)) {
@@ -1209,7 +1522,6 @@ void drawControlsOverlayPanel(String footer, boolean fullBackdrop) {
   hint(DISABLE_DEPTH_TEST);
   camera();
   perspective();
-  textFont(uiFontHud);
   rectMode(CORNER);
   if (fullBackdrop) {
     noStroke();
@@ -1220,51 +1532,152 @@ void drawControlsOverlayPanel(String footer, boolean fullBackdrop) {
     fill(0, 165);
     rect(0, 0, width, height);
   }
-  float panelW = min(width - 40, 820);
-  float panelH = min(height - 80, 480);
-  float px = (width - panelW) * 0.5;
-  float py = (height - panelH) * 0.5;
+
+  int count = controlPanelRows != null ? controlPanelRows.length : 0;
+  int cols = CTRL_GRID_COLS;
+  int gridRows = count > 0 ? (count + cols - 1) / cols : 0;
+
+  final float keySize = 40;
+  final float mouseSize = 54;
+  final float iconGap = 5;
+  final float cellPad = 10;
+  final float gridGap = 10;
+  final float labelH = 36;
+  float iconAreaH = max(keySize * 2 + iconGap + 4, mouseSize + 4);
+  float cellW = 168;
+  float cellH = iconAreaH + labelH + cellPad * 2;
+  float gridW = cols * cellW + (cols - 1) * gridGap;
+  float gridH = gridRows * cellH + max(0, gridRows - 1) * gridGap;
+
+  float titleBlockH = 48;
+  float footerBlockH = 58;
+  float panelW = min(width - 28, gridW + 44);
+  float panelH = min(height - 36, titleBlockH + gridH + footerBlockH + 24);
+  float px = (width - panelW) * 0.5f;
+  float py = (height - panelH) * 0.5f;
   drawWesternPanel(px, py, panelW, panelH, 12);
+
   textAlign(CENTER, TOP);
+  textFontDisplay();
   fill(255, 242, 175);
-  textSize(42);
-  text("CONTROLS", width * 0.5, py + 20);
-  textSize(22);
-  textLeading(32);
-  fill(255, 252, 235);
-  String[] lines = {
-    "W A S D — move",
-    "Left mouse (hold) — shoot (aim on ground)",
-    "Right mouse + drag — rotate camera",
-    "Mouse wheel — zoom",
-    "1 / 2 / 3 — Revolver / Shotgun / Repeater",
-    "R — reload current weapon",
-    "Shift — sprint",
-    "Space — skip wave break",
-    "Q — quit (saves progress)"
-  };
-  float ty = py + 78;
-  float rowH = 34;
-  for (String ln : lines) {
-    noStroke();
-    fill(32, 20, 12, 200);
-    rect(px + 24, ty - 4, panelW - 48, rowH, 6);
-    stroke(140, 95, 45, 120);
-    strokeWeight(1);
-    noFill();
-    rect(px + 25, ty - 3, panelW - 50, rowH - 2, 5);
-    noStroke();
-    fill(255, 252, 235);
-    text(ln, width * 0.5, ty + 4);
-    ty += rowH + 6;
+  textSize(32);
+  text("CONTROLS", width * 0.5f, py + 12);
+
+  float gridX = px + (panelW - gridW) * 0.5f;
+  float gridY = py + titleBlockH;
+  if (controlPanelRows != null) {
+    for (int i = 0; i < controlPanelRows.length; i++) {
+      int col = i % cols;
+      int row = i / cols;
+      float cx = gridX + col * (cellW + gridGap);
+      float cy = gridY + row * (cellH + gridGap);
+      drawControlGridCell(cx, cy, cellW, cellH, controlPanelRows[i], keySize, mouseSize, iconGap, iconAreaH, labelH);
+    }
   }
-  textSize(18);
+
+  String modeLine = endlessMode || selectedGameMode == GAME_MODE_ENDLESS
+    ? "Endless — difficulty rises each wave · survive the timer"
+    : STORY_MAX_WAVES + " waves · clear all bandits or survive the timer";
+  textSize(13);
+  textLeading(17);
   fill(245, 235, 210);
-  text(maxWaves + " waves · clear all bandits or survive the timer", width * 0.5, py + panelH - 58);
-  textSize(24);
+  text(modeLine, width * 0.5f, py + panelH - footerBlockH + 4);
+  textSize(17);
+  textLeading(20);
   fill(255, 252, 240);
-  text(footer, width * 0.5, py + panelH - 30);
+  text(footer, width * 0.5f, py + panelH - 26);
   reset2DDrawState();
+}
+
+void drawControlKeyButton(String label, float x, float y, float w, float h) {
+  noStroke();
+  fill(0, 50);
+  rect(x + 1.5f, y + 2.5f, w, h, 6);
+  fill(252, 246, 232);
+  rect(x, y, w, h, 6);
+  stroke(145, 95, 48, 200);
+  strokeWeight(1.2f);
+  noFill();
+  rect(x + 0.5f, y + 0.5f, w - 1, h - 1, 5);
+  noStroke();
+  textFontBody();
+  textAlign(CENTER, CENTER);
+  float ts = min(h * 0.5f, w * 0.78f);
+  if (label.length() > 4) ts *= 0.68f;
+  else if (label.length() > 1) ts *= 0.82f;
+  textSize(ts);
+  fill(32, 20, 12);
+  text(label, x + w * 0.5f, y + h * 0.52f);
+}
+
+void drawControlMouseIcon(PImage img, float x, float y, float size) {
+  if (img == null) return;
+  imageMode(CORNER);
+  noStroke();
+  fill(0, 45);
+  rect(x + 1, y + 2, size, size, 5);
+  image(img, x, y, size, size);
+}
+
+void drawControlKeysWASD(String[] keys, float x, float y, float size, float gap) {
+  if (keys == null || keys.length < 4) return;
+  float midX = x + size + gap;
+  drawControlKeyButton(keys[0], midX, y, size, size);
+  float row2Y = y + size + gap;
+  drawControlKeyButton(keys[1], x, row2Y, size, size);
+  drawControlKeyButton(keys[2], midX, row2Y, size, size);
+  drawControlKeyButton(keys[3], x + (size + gap) * 2, row2Y, size, size);
+}
+
+void drawControlKeysRow(String[] keys, float x, float y, float size, float gap) {
+  if (keys == null) return;
+  float ix = x;
+  for (String k : keys) {
+    float kw = controlKeyWidth(k, size);
+    drawControlKeyButton(k, ix, y, kw, size);
+    ix += kw + gap;
+  }
+}
+
+void drawControlMouseRow(PImage[] icons, float x, float y, float size, float gap) {
+  if (icons == null) return;
+  float ix = x;
+  for (PImage img : icons) {
+    drawControlMouseIcon(img, ix, y, size);
+    ix += size + gap;
+  }
+}
+
+void drawControlGridCell(float cx, float cy, float cw, float ch, ControlPanelRow row,
+    float keySize, float mouseSize, float iconGap, float iconAreaH, float labelH) {
+  noStroke();
+  fill(32, 20, 12, 215);
+  rect(cx, cy, cw, ch, 7);
+  stroke(150, 100, 50, 140);
+  strokeWeight(1);
+  noFill();
+  rect(cx + 1, cy + 1, cw - 2, ch - 2, 6);
+  noStroke();
+
+  float blockW = controlCellIconBlockW(row, keySize, mouseSize, iconGap);
+  float blockH = controlCellIconBlockH(row, keySize, mouseSize, iconGap);
+  float iconX = cx + (cw - blockW) * 0.5f;
+  float iconY = cy + 10 + (iconAreaH - blockH) * 0.5f;
+
+  if (row.layout == CTRL_LAYOUT_WASD && row.keyLabels != null && row.keyLabels.length >= 4) {
+    drawControlKeysWASD(row.keyLabels, iconX, iconY, keySize, iconGap);
+  } else if (row.keyLabels != null && row.keyLabels.length > 0) {
+    drawControlKeysRow(row.keyLabels, iconX, iconY, keySize, iconGap);
+  } else if (row.mouseIcons != null && row.mouseIcons.length > 0) {
+    drawControlMouseRow(row.mouseIcons, iconX, iconY, mouseSize, iconGap);
+  }
+
+  textFontBody();
+  textAlign(CENTER, TOP);
+  textSize(13);
+  textLeading(16);
+  fill(255, 248, 235);
+  text(row.title, cx + cw * 0.5f, cy + ch - labelH + 4);
 }
 
 boolean controlsHudButtonHit(float mx, float my) {
@@ -1273,27 +1686,31 @@ boolean controlsHudButtonHit(float mx, float my) {
 }
 
 void drawControlsHudButton() {
-  controlsBtnX = 276;
-  controlsBtnY = 16;
+  controlsBtnX = 340;
+  controlsBtnY = 12;
+  controlsBtnW = 96;
+  controlsBtnH = 26;
   boolean hot = controlsHudButtonHit(mouseX, mouseY);
   drawUiButton(uiBtnControls, uiBtnControlsHot, controlsBtnX, controlsBtnY, controlsBtnW, controlsBtnH, hot);
   if (uiBtnControls == null) {
+    textFontBody();
     textAlign(CENTER, CENTER);
-    textSize(13);
+    textSize(10);
     fill(248, 215, 125);
-    text("CONTROLS", controlsBtnX + controlsBtnW * 0.5, controlsBtnY + controlsBtnH * 0.5 + 1);
+    text("Controls", controlsBtnX + controlsBtnW * 0.5, controlsBtnY + controlsBtnH * 0.5 + 1);
   }
   reset2DDrawState();
 }
 
 // Task-2+: angled top-down western shootout with proper aiming + camera control.
 void drawSecondScreen(float t) {
-  background(18, 12, 8);
+  background(92, 62, 48);
   hint(ENABLE_DEPTH_TEST);
 
   float fr = max(frameRate, 30);
   float dt = 1.0 / fr;
-  boolean gameplayActive = !showControlsOverlay && !finished;
+  boolean gameplayActive = !showControlsOverlay && !finished && !gamePaused;
+  if (weaponUnlockBannerTimer > 0) weaponUnlockBannerTimer -= dt;
   if (gameplayActive) {
     updateWaveTimers(dt);
     updateWaveIntro(dt);
@@ -1388,7 +1805,7 @@ void drawSecondScreen(float t) {
   camera();
   perspective();
   noLights();
-  textFont(uiFontHud);
+  textFontBody();
   float sx = (random(-1, 1) + random(-1, 1)) * 0.5 * (hurtShakePx + camShakePx);
   float sy = (random(-1, 1) + random(-1, 1)) * 0.5 * (hurtShakePx + camShakePx * 0.85f);
   drawSprintTrail2D();
@@ -1407,7 +1824,11 @@ void drawSecondScreen(float t) {
   drawHurtFeedbackOverlay();
   drawPickupPlusFx2D();
   drawAmmoGainFx2D();
+  drawWeaponUnlockBanner2D();
   reset2DDrawState();
+  if (gamePaused && !finished) {
+    drawPauseOverlay();
+  }
   if (showControlsOverlay) {
     drawControlsOverlayPanel("Click anywhere or press H to close", false);
   }
@@ -1419,7 +1840,7 @@ void updateWaveTimers(float dt) {
   waveBreakTimer -= dt;
   if (waveBreakTimer > 0) return;
   currentWave++;
-  if (currentWave > maxWaves) {
+  if (!endlessMode && currentWave > maxWaves) {
     finished = true;
     gameStateText = "YOU WIN";
     playWavSafe("win.wav");
@@ -1495,27 +1916,61 @@ PVector randomBanditSpawnForWave(int index, int total, int wave, ArrayList<PVect
   );
 }
 
+int rollBanditWeaponForWave(int w) {
+  float r = random(1);
+  if (w <= 2) return BANDIT_WPN_REVOLVER;
+  if (w <= 5) return r < 0.7 ? BANDIT_WPN_REVOLVER : BANDIT_WPN_SHOTGUN;
+  if (w <= 8) {
+    if (r < 0.35) return BANDIT_WPN_REVOLVER;
+    if (r < 0.7) return BANDIT_WPN_SHOTGUN;
+    return BANDIT_WPN_REPEATER;
+  }
+  if (r < 0.2) return BANDIT_WPN_REVOLVER;
+  if (r < 0.5) return BANDIT_WPN_SHOTGUN;
+  return BANDIT_WPN_REPEATER;
+}
+
+void applyWeaponUnlocksForWave(int w) {
+  if (endlessMode || player == null) return;
+  if (w >= UNLOCK_SHOTGUN_WAVE && !player.isWeaponUnlocked(1)) {
+    player.unlockWeaponSlot(1);
+    weaponUnlockBannerText = "SHOTGUN UNLOCKED";
+    weaponUnlockBannerTimer = 3.5f;
+  }
+  if (w >= UNLOCK_REPEATER_WAVE && !player.isWeaponUnlocked(2)) {
+    player.unlockWeaponSlot(2);
+    weaponUnlockBannerText = "REPEATER UNLOCKED";
+    weaponUnlockBannerTimer = 3.5f;
+  }
+}
+
 void spawnWave(int w) {
+  applyWeaponUnlocksForWave(w);
   bandits.clear();
   enemyBullets.clear();
   bullets.clear();
   pendingBanditSpawns.clear();
   previewSpawnMarkers.clear();
-  int n = 2 + w * 2;
+  int n = max(2, 2 + w + w / 2);
   color[] outfits = {
     color(180, 60, 50), color(160, 100, 50), color(130, 60, 90),
     color(80, 120, 145), color(100, 80, 60)
   };
   ArrayList<PVector> usedSpawns = new ArrayList<PVector>();
-  float hpMul = 1 + 0.15 * (w - 1);
-  float spdMul = 1 + 0.1 * (w - 1);
+  float hpMul = 1 + 0.10f * (w - 1);
+  float spdMul = 1 + 0.065f * (w - 1);
+  if (endlessMode && w > STORY_MAX_WAVES) {
+    hpMul += 0.055f * (w - STORY_MAX_WAVES);
+    spdMul += 0.028f * (w - STORY_MAX_WAVES);
+  }
   for (int i = 0; i < n; i++) {
     PVector p = randomBanditSpawnForWave(i, n, w, usedSpawns);
     if (circleOverlapsColliderXZ(p.x, p.z, 20)) nudgeToClearPosition(p, 20);
     usedSpawns.add(p.copy());
     previewSpawnMarkers.add(p.copy());
+    int wpn = rollBanditWeaponForWave(w);
     pendingBanditSpawns.add(new PendingBandit(
-      p.x, p.z, outfits[i % outfits.length], spdMul, hpMul, w
+      p.x, p.z, outfits[i % outfits.length], spdMul, hpMul, w, wpn
     ));
   }
   wavePreviewTimer = WAVE_PREVIEW_DURATION;
@@ -1527,7 +1982,15 @@ void spawnWave(int w) {
 
 void initGame() {
   stopMusic();
+  endlessMode = (selectedGameMode == GAME_MODE_ENDLESS);
+  maxWaves = STORY_MAX_WAVES;
+  gamePaused = false;
+  gamePauseAccumMs = 0;
+  gamePauseStartMs = 0;
+  weaponUnlockBannerTimer = 0;
+  weaponUnlockBannerText = "";
   player = new Player(0, 0);
+  player.resetWeaponsForMode(endlessMode);
   bullets = new ArrayList<Bullet>();
   enemyBullets = new ArrayList<EnemyBullet>();
   bandits = new ArrayList<Bandit>();
@@ -1773,22 +2236,41 @@ PVector groundFromMouse(float mx, float my) {
 void mousePressed() {
   if (gameFlow == FLOW_TITLE) {
     if (settingsButtonHit(mouseX, mouseY)) {
+      playUiClick();
       gameFlow = FLOW_SETTINGS;
       return;
     }
-    gameFlow = FLOW_CONTROLS;
+    if (titleModeButtonHit(mouseX, mouseY, storyBtnX, storyBtnY)) {
+      playUiClick();
+      selectedGameMode = GAME_MODE_STORY;
+      gameFlow = FLOW_CONTROLS;
+      return;
+    }
+    if (titleModeButtonHit(mouseX, mouseY, endlessBtnX, endlessBtnY)) {
+      playUiClick();
+      selectedGameMode = GAME_MODE_ENDLESS;
+      gameFlow = FLOW_CONTROLS;
+      return;
+    }
     return;
   }
   if (gameFlow == FLOW_SETTINGS) {
+    if (displayModeButtonHit(mouseX, mouseY)) {
+      playUiClick();
+      applyDisplayMode(!settingsFullscreen);
+      return;
+    }
     float barX = width * 0.5f - settingsBarW * 0.5f;
     if (mouseY >= settingsSfxBarY - 10 && mouseY <= settingsSfxBarY + settingsBarH + 10
         && mouseX >= barX - 8 && mouseX <= barX + settingsBarW + 8) {
+      playUiClick();
       settingsDraggingSfx = true;
       settingsSfxVol = volumeFromBarX(mouseX, barX);
       applyAudioVolumes();
     }
     if (mouseY >= settingsMusicBarY - 10 && mouseY <= settingsMusicBarY + settingsBarH + 10
         && mouseX >= barX - 8 && mouseX <= barX + settingsBarW + 8) {
+      playUiClick();
       settingsDraggingMusic = true;
       settingsMusicVol = volumeFromBarX(mouseX, barX);
       applyAudioVolumes();
@@ -1796,15 +2278,31 @@ void mousePressed() {
     return;
   }
   if (gameFlow == FLOW_CONTROLS) {
+    playUiClick();
     beginPlaySession();
     return;
   }
   if (gameFlow == FLOW_PLAY) {
+    if (gamePaused && !finished) {
+      if (pauseButtonHit(mouseX, mouseY, pauseContinueBtnX, pauseContinueBtnY)) {
+        playUiClick();
+        setGamePaused(false);
+        return;
+      }
+      if (pauseButtonHit(mouseX, mouseY, pauseMenuBtnX, pauseMenuBtnY)) {
+        playUiClick();
+        returnToTitleFromPause();
+        return;
+      }
+      return;
+    }
     if (showControlsOverlay) {
+      playUiClick();
       showControlsOverlay = false;
       return;
     }
     if (mouseButton == LEFT && controlsHudButtonHit(mouseX, mouseY)) {
+      playUiClick();
       showControlsOverlay = true;
       shooting = false;
       return;
@@ -1842,7 +2340,118 @@ void mouseWheel(MouseEvent e) {
   camDist = constrain(camDist, camDistMin, camDistMax);
 }
 
+void returnToTitleFromPause() {
+  gamePaused = false;
+  shooting = false;
+  saveProgression();
+  stopMusic();
+  gameFlow = FLOW_TITLE;
+  startMenuMusic();
+}
+
+boolean pauseButtonHit(float mx, float my, float bx, float by) {
+  return mx >= bx && mx <= bx + pauseBtnW && my >= by && my <= by + pauseBtnH;
+}
+
+void drawPauseOverlay() {
+  hint(DISABLE_DEPTH_TEST);
+  camera();
+  perspective();
+  noStroke();
+  fill(0, 0, 0, 200);
+  rect(0, 0, width, height);
+  fill(40, 18, 8, 90);
+  rect(0, 0, width, height * 0.22f);
+  rect(0, height * 0.78f, width, height * 0.22f);
+
+  float cx = width * 0.5f;
+  float panelW = min(width - 56, 500);
+  float panelH = 340;
+  float px = (width - panelW) * 0.5f;
+  float py = (height - panelH) * 0.5f;
+  drawWesternPanel(px, py, panelW, panelH, 16);
+
+  stroke(190, 140, 65, 200);
+  strokeWeight(2);
+  float ruleY = py + 78;
+  line(px + 36, ruleY, px + panelW - 36, ruleY);
+  noStroke();
+
+  textFontDisplay();
+  textAlign(CENTER, CENTER);
+  fill(255, 242, 175);
+  textSize(46);
+  text("PAUSED", cx, py + 46);
+
+  textFontBody();
+  textSize(15);
+  fill(220, 200, 168);
+  if (player != null && gameFlow == FLOW_PLAY) {
+    float timeLeft = max(0, gameDurationSec + extraTimeSec - gameElapsedSec());
+    text("Wave " + currentWave + "  ·  Score " + score + "  ·  Kills " + kills
+      + "  ·  " + nf(timeLeft, 0, 0) + "s left", cx, py + 102);
+  } else {
+    text("Take a breath, partner", cx, py + 102);
+  }
+
+  textSize(13);
+  fill(175, 155, 130);
+  text("ESC or P — resume", cx, py + 128);
+
+  pauseContinueBtnX = cx - pauseBtnW * 0.5f;
+  pauseContinueBtnY = py + 158;
+  pauseMenuBtnX = pauseContinueBtnX;
+  pauseMenuBtnY = py + 222;
+  boolean contHot = pauseButtonHit(mouseX, mouseY, pauseContinueBtnX, pauseContinueBtnY);
+  boolean menuHot = pauseButtonHit(mouseX, mouseY, pauseMenuBtnX, pauseMenuBtnY);
+  drawPauseMenuButton(pauseContinueBtnX, pauseContinueBtnY, "CONTINUE", contHot);
+  drawPauseMenuButton(pauseMenuBtnX, pauseMenuBtnY, "MAIN MENU", menuHot);
+  reset2DDrawState();
+}
+
+void drawPauseMenuButton(float bx, float by, String label, boolean hot) {
+  noStroke();
+  fill(32, 18, 10, hot ? 225 : 185);
+  rect(bx, by, pauseBtnW, pauseBtnH, 8);
+  stroke(200, 145, 70, hot ? 255 : 200);
+  strokeWeight(2);
+  noFill();
+  rect(bx + 1, by + 1, pauseBtnW - 2, pauseBtnH - 2, 7);
+  noStroke();
+  textAlign(CENTER, CENTER);
+  textFontDisplay();
+  textSize(20);
+  fill(255, 248, 220, hot ? 255 : 235);
+  text(label, bx + pauseBtnW * 0.5f, by + pauseBtnH * 0.52f);
+}
+
+void drawWeaponUnlockBanner2D() {
+  if (weaponUnlockBannerTimer <= 0 || weaponUnlockBannerText.length() == 0) return;
+  float u = constrain(weaponUnlockBannerTimer / 3.5f, 0, 1);
+  int a = (int)(255 * min(1, u * 2.2f));
+  textFontDisplay();
+  textAlign(CENTER, CENTER);
+  textSize(28);
+  fill(0, 0, 0, a * 0.6f);
+  text(weaponUnlockBannerText, width * 0.5f + 2, height * 0.2f + 2);
+  fill(255, 220, 120, a);
+  text(weaponUnlockBannerText, width * 0.5f, height * 0.2f);
+}
+
 void keyPressed() {
+  if (gameFlow == FLOW_PLAY && !finished) {
+    if (key == ESC || keyCode == ESC) {
+      key = 0;
+      setGamePaused(!gamePaused);
+      return;
+    }
+    if (gamePaused) {
+      if (key == 'p' || key == 'P' || key == '\n' || key == '\r') {
+        setGamePaused(false);
+      }
+      return;
+    }
+  }
   if (gameFlow == FLOW_SETTINGS) {
     if (key == ESC || keyCode == ESC) {
       key = 0;
@@ -1877,21 +2486,22 @@ void keyPressed() {
   if (key == 'r' || key == 'R') {
     if (finished) {
       beginPlaySession();
-    } else if (gameFlow == FLOW_PLAY && !showControlsOverlay) {
+    } else if (gameFlow == FLOW_PLAY && !showControlsOverlay && !gamePaused) {
       player.startReload();
     }
   }
   if (key == 'h' || key == 'H') {
-    if (gameFlow == FLOW_PLAY && !finished) {
+    if (gameFlow == FLOW_PLAY && !finished && !gamePaused) {
       showControlsOverlay = !showControlsOverlay;
       if (showControlsOverlay) shooting = false;
     }
   }
-  if (!finished && gameFlow == FLOW_PLAY && !showControlsOverlay) {
+  if (!finished && gameFlow == FLOW_PLAY && !showControlsOverlay && !gamePaused) {
     if (key == '1') player.setWeaponSlot(0);
     if (key == '2') player.setWeaponSlot(1);
     if (key == '3') player.setWeaponSlot(2);
     if (key == ' ' && waveState == WAVE_STATE_BREAK) waveBreakTimer = 0;
+    if (key == 't' || key == 'T') forceCompleteCurrentWave();
   }
   if (key == CODED && keyCode == SHIFT) sprintHeld = true;
 }
@@ -1905,6 +2515,34 @@ void keyReleased() {
 }
 
 // === Game state ===
+
+/** Test key [T]: instantly end the current wave (clears spawns + living bandits). */
+void forceCompleteCurrentWave() {
+  if (finished || gameFlow != FLOW_PLAY || waveState != WAVE_STATE_FIGHT) return;
+
+  pendingBanditSpawns.clear();
+  waveSpawning = false;
+  wavePreviewTimer = 0;
+  staggerSpawnTimer = 0;
+
+  for (Bandit b : bandits) {
+    b.alive = false;
+    b.hp = 0;
+  }
+
+  if (!endlessMode && currentWave >= STORY_MAX_WAVES) {
+    finished = true;
+    gameStateText = "YOU WIN";
+    playWavSafe("win.wav");
+    return;
+  }
+
+  waveState = WAVE_STATE_BREAK;
+  waveBreakTimer = WAVE_BREAK_DURATION;
+  extraTimeSec += 18;
+  score += 50 * currentWave;
+  playWavSafe("wave_clear.wav");
+}
 
 void updateGameState(float t) {
   if (finished) return;
@@ -1937,14 +2575,14 @@ void updateGameState(float t) {
     if (b.alive) aliveCount++;
   }
   if (aliveCount == 0 && bandits.size() > 0) {
-    if (currentWave == maxWaves) {
+    if (!endlessMode && currentWave >= STORY_MAX_WAVES) {
       finished = true;
       gameStateText = "YOU WIN";
       playWavSafe("win.wav");
     } else {
       waveState = WAVE_STATE_BREAK;
       waveBreakTimer = WAVE_BREAK_DURATION;
-      extraTimeSec += 14;
+      extraTimeSec += 18;
       score += 50 * currentWave;
       playWavSafe("wave_clear.wav");
     }
@@ -2004,11 +2642,118 @@ void drawWesternPanel(float x, float y, float w, float h, float cornerR) {
 }
 
 void drawHudLabelShadow(String s, float x, float y, int col) {
+  textFontBody();
   textAlign(LEFT, TOP);
   fill(0, 130);
-  text(s, x + 1.5f, y + 1.5f);
+  text(s, x + 1, y + 1);
   fill(col);
   text(s, x, y);
+}
+
+/** Left bounty panel — full labels, sized to Sancreek metrics. */
+void drawLeftBountyHud(float lx, float ly) {
+  textFontBody();
+  float padX = 16;
+  float padY = 12;
+  float lineGap = 7;
+  float pw = HUD_LEFT_PANEL_W;
+
+  textAlign(LEFT, TOP);
+  textSize(15);
+  textLeading(18);
+  float h0 = textAscent() + textDescent() + lineGap;
+  textSize(19);
+  textLeading(22);
+  float h1 = textAscent() + textDescent() + lineGap;
+  textSize(15);
+  textLeading(18);
+  float h2 = textAscent() + textDescent();
+  float ph = padY * 2 + h0 + h1 * 4 + h2;
+
+  drawWesternPanel(lx, ly, pw, ph, 9);
+
+  String waveLine = endlessMode
+    ? ("Wave  " + currentWave)
+    : ("Wave  " + currentWave + " / " + STORY_MAX_WAVES);
+  String modeHud = endlessMode ? "Mode  Endless" : "Mode  Bounty";
+  float y = ly + padY;
+  fill(200, 155, 75);
+  textSize(15);
+  textLeading(18);
+  text("◆ BOUNTY", lx + padX, y);
+  y += h0;
+  textSize(19);
+  textLeading(22);
+  drawHudLabelShadow(waveLine, lx + padX, y, color(255, 238, 210));
+  y += h1;
+  drawHudLabelShadow("Score  " + score, lx + padX, y, color(235, 220, 198));
+  y += h1;
+  drawHudLabelShadow("Kills  " + kills, lx + padX, y, color(220, 205, 185));
+  y += h1;
+  drawHudLabelShadow(modeHud, lx + padX, y, color(200, 175, 130));
+  y += h1;
+  textSize(15);
+  textLeading(18);
+  fill(175, 155, 130);
+  text("Best run  " + progressionHighScore, lx + padX, y);
+}
+
+/** Bottom-right weapon + ammo stack (avoids overlapping anchors). */
+void drawRightWeaponAmmoHud(float hpBarY) {
+  float x = width - 14;
+  float y = hpBarY - 6;
+  int slot = player.weaponSlot;
+  textAlign(RIGHT, BOTTOM);
+
+  if (player.reloading) {
+    textFontDisplay();
+    textSize(24);
+    fill(120, 200, 255);
+    text("RELOAD…", x, y);
+    y -= textAscent() + textDescent() + 7;
+    textFontDisplay();
+    textSize(18);
+    fill(200, 155, 75);
+    text(player.weaponName().toUpperCase(), x, y);
+    return;
+  }
+
+  textFontDisplay();
+  textSize(50);
+  String ams = str(player.wAmmo[slot]) + " / " + str(player.wMax[slot]);
+  int amCol = player.wAmmo[slot] <= 0 ? color(255, 150, 110) : color(255, 245, 228);
+  fill(0, 120);
+  text(ams, x + 1, y + 1);
+  fill(amCol);
+  text(ams, x, y);
+  y -= textAscent() + textDescent() + 5;
+
+  if (!finished && player.wAmmo[slot] > 0 && player.wAmmo[slot] <= 5) {
+    textFontBody();
+    textSize(13);
+    fill(255, 200, 70, 240);
+    text("LOW AMMO", x, y);
+    y -= textAscent() + textDescent() + 7;
+  }
+
+  if (!endlessMode) {
+    textFontBody();
+    textSize(12);
+    textLeading(14);
+    fill(160, 140, 120);
+    if (!player.isWeaponUnlocked(1)) {
+      text("[2] Shotgun — wave " + UNLOCK_SHOTGUN_WAVE, x, y);
+      y -= textAscent() + textDescent() + 3;
+    } else if (!player.isWeaponUnlocked(2)) {
+      text("[3] Repeater — wave " + UNLOCK_REPEATER_WAVE, x, y);
+      y -= textAscent() + textDescent() + 3;
+    }
+  }
+
+  textFontDisplay();
+  textSize(19);
+  fill(200, 155, 75);
+  text(player.weaponName().toUpperCase(), x, y);
 }
 
 void drawRulesPanel2D() {
@@ -2033,21 +2778,22 @@ void drawRulesPanel2D() {
   noStroke();
 
   textAlign(CENTER, TOP);
-  textFont(uiFontHud);
-  textSize(12);
-  textLeading(15);
+  textFontBody();
+  textSize(9);
+  textLeading(12);
   String line1 =
-    "WASD move · Mouse shoot · 1 / 2 / 3 weapons · Shift sprint · R reload · RMB drag camera · Wheel zoom";
-  String line2 =
-    maxWaves + " waves · SPACE skips wave break · Q quit (saves progress)";
+    "WASD · shoot · 1/2/3 · Shift sprint · R reload · RMB camera · wheel zoom";
+  String line2 = endlessMode
+    ? "Endless · ESC pause · SPACE skip break · Q quit"
+    : STORY_MAX_WAVES + " waves · ESC pause · SPACE skip · Q quit";
   float cx = panelX + panelW * 0.5;
-  float ty = panelY + 14;
+  float ty = panelY + 10;
   fill(0, 85);
   text(line1, cx + 1, ty + 1);
-  text(line2, cx + 1, ty + 1 + 17);
+  text(line2, cx + 1, ty + 1 + 13);
   fill(248, 215, 125);
   text(line1, cx, ty);
-  text(line2, cx, ty + 17);
+  text(line2, cx, ty + 13);
 }
 
 void drawHudBar(float x, float y, float w, float h, float ratio, int colTrack, int colFill, int colBorder) {
@@ -2134,46 +2880,122 @@ void drawHudResourceBar(float x, float y, float w, float h, float ratio,
   }
 }
 
+void drawGameOverOverlay(float t) {
+  boolean isWin = gameStateText.equals("YOU WIN");
+  boolean isLoss = gameStateText.equals("YOU LOST") || gameStateText.equals("TIME OVER");
+
+  hint(DISABLE_DEPTH_TEST);
+  camera();
+  perspective();
+  noStroke();
+  fill(0, 0, 0, isLoss ? 215 : 195);
+  rect(0, 0, width, height);
+  if (isLoss) {
+    fill(72, 16, 10, 95);
+    rect(0, 0, width, height);
+    fill(40, 8, 5, 80);
+    rect(0, height * 0.65f, width, height * 0.35f);
+  } else if (isWin) {
+    fill(28, 38, 18, 70);
+    rect(0, 0, width, height);
+  }
+
+  float cx = width * 0.5f;
+  float panelW = min(width - 52, 560);
+  float panelH = isWin ? 318 : 336;
+  float px = (width - panelW) * 0.5f;
+  float py = (height - panelH) * 0.5f;
+  drawWesternPanel(px, py, panelW, panelH, 16);
+
+  stroke(isLoss ? color(160, 55, 40, 220) : color(190, 140, 65, 220));
+  strokeWeight(2);
+  float ruleY = py + 82;
+  line(px + 40, ruleY, px + panelW - 40, ruleY);
+  noStroke();
+
+  textFontDisplay();
+  textAlign(CENTER, CENTER);
+  textSize(isLoss ? 48 : 50);
+  fill(0, 120);
+  text(gameStateText, cx + 2, py + 48);
+  fill(isLoss ? color(255, 118, 88) : color(255, 242, 175));
+  text(gameStateText, cx, py + 46);
+
+  textFontBody();
+  textSize(16);
+  fill(isLoss ? color(220, 175, 155) : color(215, 200, 175));
+  String sub;
+  if (gameStateText.equals("YOU LOST")) sub = "The desert got the better of you, partner.";
+  else if (gameStateText.equals("TIME OVER")) sub = "Sun went down — time's up.";
+  else if (isWin) sub = endlessMode ? "You outlasted the frontier." : "All " + STORY_MAX_WAVES + " waves cleared.";
+  else sub = "Ride on.";
+  text(sub, cx, py + 108);
+
+  textSize(14);
+  fill(200, 180, 155);
+  text("Wave " + currentWave + "  ·  Score " + score + "  ·  Kills " + kills, cx, py + 136);
+
+  stroke(140, 95, 50, 120);
+  strokeWeight(1);
+  line(px + 48, py + 158, px + panelW - 48, py + 158);
+  noStroke();
+
+  textSize(15);
+  fill(185, 168, 145);
+  text("Best run  " + progressionHighScore + "     Lifetime kills  " + progressionTotalKills, cx, py + 182);
+
+  textSize(16);
+  fill(255, 235, 200);
+  text("R — play again", cx, py + 228);
+  textSize(14);
+  fill(175, 155, 130);
+  text("Q — quit to title (saves progress)", cx, py + 254);
+
+  reset2DDrawState();
+}
+
+void drawTimeHud(float remaining, float timeBudget, float timeRatio, float t) {
+  float tw = 198;
+  float th = 68;
+  float rx = width - tw - 12;
+  float ry = 12;
+  boolean urgent = remaining <= 35 && !finished;
+  float pulse = urgent ? 0.82f + 0.18f * sin(t * 7.5f) : 1;
+
+  drawWesternPanel(rx, ry, tw, th, 10);
+  textFontDisplay();
+  textAlign(LEFT, TOP);
+  textSize(12);
+  fill(200, 155, 75);
+  text("TIME", rx + 14, ry + 10);
+
+  int totalSec = max(0, (int)ceil(remaining));
+  int mm = totalSec / 60;
+  int ss = totalSec % 60;
+  String clock = nf(mm, 1) + ":" + nf(ss, 2);
+
+  textAlign(RIGHT, TOP);
+  textSize(36);
+  fill(0, 100);
+  text(clock, rx + tw - 14, ry + 7);
+  fill(urgent ? color(255, 130, 95, 255 * pulse) : color(255, 248, 235));
+  text(clock, rx + tw - 15, ry + 6);
+
+  int barCol = urgent ? color(235, 95, 55) : color(95, 175, 235);
+  drawHudBar(rx + 14, ry + th - 14, tw - 28, 8, timeRatio,
+    color(32, 20, 14), barCol, color(175, 125, 55));
+}
+
 /** Western HUD panels. */
 void drawHudDistributed(float t) {
+  textFontBody();
   rectMode(CORNER);
   float remaining = max(0, gameDurationSec + extraTimeSec - t);
   float timeBudget = max(1, gameDurationSec + extraTimeSec);
   float timeRatio = remaining / timeBudget;
 
-  float lx = 18, ly = 16;
-  float pw = 246;
-  float ph = 118;
-  drawWesternPanel(lx, ly, pw, ph, 10);
-  fill(200, 155, 75);
-  textAlign(LEFT, TOP);
-  textSize(11);
-  text("◆ BOUNTY", lx + 14, ly + 10);
-  textSize(17);
-  drawHudLabelShadow("Wave  " + currentWave + " / " + maxWaves, lx + 14, ly + 28, color(255, 238, 210));
-  textSize(14);
-  drawHudLabelShadow("Score  " + score, lx + 14, ly + 50, color(235, 220, 198));
-  drawHudLabelShadow("Kills  " + kills, lx + 14, ly + 70, color(220, 205, 185));
-  drawHudLabelShadow("Gold  " + player.gold, lx + 14, ly + 90, color(230, 200, 120));
-  textSize(10);
-  fill(175, 155, 130);
-  text("Best run  " + progressionHighScore, lx + 14, ly + 104);
-
-  float rx = width - 258;
-  float ry = 16;
-  float tw = 242;
-  float th = 72;
-  drawWesternPanel(rx, ry, tw, th, 10);
-  fill(200, 155, 75);
-  textSize(11);
-  textAlign(LEFT, TOP);
-  text("◆ TIME", rx + 14, ry + 10);
-  drawHudBar(rx + 14, ry + 28, tw - 28, 14, timeRatio,
-    color(32, 20, 14), color(85, 165, 225), color(175, 125, 55));
-  fill(255, 235, 210);
-  textSize(13);
-  textAlign(RIGHT, TOP);
-  text(nf(remaining, 0, 1) + " s", rx + tw - 14, ry + 10);
+  drawLeftBountyHud(14, 12);
+  drawTimeHud(remaining, timeBudget, timeRatio, t);
 
   float hpBarH = 26;
   float hpBarY = height - hpBarH;
@@ -2182,67 +3004,15 @@ void drawHudDistributed(float t) {
   boolean hpCrit = hpR <= 0.25 && player.hp > 0;
   drawHudResourceBar(0, hpBarY, width, hpBarH, hpR,
     hpCol, color(18, 10, 7), color(175, 120, 55), t, hpCrit, 24);
+  textFontBody();
   textAlign(LEFT, CENTER);
-  textSize(12);
+  textSize(10);
   fill(255, 220, 185);
-  text("♥  " + (int)player.hp + " / " + (int)player.maxHp, 14, hpBarY + hpBarH * 0.52);
+  text((int)player.hp + "/" + (int)player.maxHp, 12, hpBarY + hpBarH * 0.52);
 
-  int slot = player.weaponSlot;
-  textAlign(RIGHT, BOTTOM);
-  textSize(13);
-  fill(200, 155, 75);
-  text(player.weaponName().toUpperCase(), width - 18, hpBarY - 6);
-  textSize(46);
-  if (player.reloading) {
-    textSize(22);
-    fill(120, 200, 255);
-    text("RELOAD…", width - 18, hpBarY - 14);
-  } else {
-    int amCol = color(255, 245, 228);
-    if (player.wAmmo[slot] <= 0) amCol = color(255, 150, 110);
-    String ams = str(player.wAmmo[slot]) + " / " + str(player.wMax[slot]);
-    textAlign(RIGHT, BOTTOM);
-    textSize(46);
-    fill(0, 145);
-    text(ams, width - 15, hpBarY - 18);
-    fill(amCol);
-    text(ams, width - 17, hpBarY - 20);
-  }
+  drawRightWeaponAmmoHud(hpBarY);
 
-  if (!finished && player.wAmmo[slot] > 0 && player.wAmmo[slot] <= 5 && !player.reloading) {
-    textSize(12);
-    fill(255, 200, 70, 240);
-    textAlign(RIGHT, BOTTOM);
-    text("LOW AMMO", width - 18, hpBarY - 52);
-  }
-
-  if (finished) {
-    float mx = width * 0.5 - 270;
-    float my = height * 0.5 - 132;
-    drawWesternPanel(mx, my, 540, 268, 14);
-    noFill();
-    stroke(120, 75, 35, 200);
-    strokeWeight(2);
-    rect(mx + 10, my + 10, 520, 248, 10);
-    noStroke();
-    fill(255, 225, 150);
-    textAlign(CENTER, CENTER);
-    textSize(46);
-    fill(0, 110);
-    text(gameStateText, width * 0.5 + 2, height * 0.5 - 34);
-    fill(255, 225, 150);
-    text(gameStateText, width * 0.5, height * 0.5 - 36);
-    fill(210, 190, 165);
-    textSize(19);
-    text("Score: " + score + "     Kills: " + kills, width * 0.5, height * 0.5 + 18);
-    textSize(15);
-    fill(175, 160, 140);
-    text("Best score: " + progressionHighScore + "     Lifetime kills: " + progressionTotalKills,
-      width * 0.5, height * 0.5 + 44);
-    textSize(16);
-    fill(180, 160, 140);
-    text("R — restart          Q — quit", width * 0.5, height * 0.5 + 72);
-  }
+  if (finished) drawGameOverOverlay(t);
 }
 
 /** Reload progress bar at player feet (compact — no large panel). */
@@ -2260,6 +3030,7 @@ void drawPlayerReloadBarScreen() {
   noStroke();
   fill(14, 10, 7, 210);
   rect(left - 4, top - 14, bw + 8, bh + 22, 5);
+  textFontDisplay();
   textAlign(CENTER, BOTTOM);
   textSize(10);
   fill(255, 235, 200);
@@ -2287,11 +3058,13 @@ void drawReloadNeededFeedback(float gameT) {
   rect(bx, by, bw, bh, 10);
   noStroke();
   textAlign(CENTER, CENTER);
+  textFontDisplay();
   textSize(21);
   fill(0, 140);
   text("OUT OF AMMO  —  RELOAD [ R ]", width * 0.5 + 2, by + bh * 0.5 + 2);
   fill(255, 245, 220);
   text("OUT OF AMMO  —  RELOAD [ R ]", width * 0.5, by + bh * 0.5);
+  textFontBody();
   textSize(13);
   fill(255, 220, 180, 220);
   text("You cannot fire until you reload.", width * 0.5, by + bh - 14);
@@ -2299,7 +3072,7 @@ void drawReloadNeededFeedback(float gameT) {
 
 void drawSpawnPreview2D(float t) {
   if (wavePreviewTimer <= 0) return;
-  textFont(uiFontHud);
+  textFontDisplay();
   textAlign(CENTER, TOP);
   textSize(22);
   fill(0, 0, 0, 160);
@@ -2316,7 +3089,7 @@ void drawWaveBanner2D() {
   float exitFade = u < 0.2f ? u / 0.2f : 1;
   int alpha = (int)(255 * enter * exitFade);
   if (alpha < 4) return;
-  textFont(uiFontHud);
+  textFontDisplay();
   float cx = width * 0.5f;
   float cy = height * 0.34f;
   float scale = 1.0f + 0.12f * sin((1 - u) * PI);
@@ -2352,77 +3125,199 @@ void updateAndDrawShellCasings(float dt) {
   }
 }
 
-/** Wave break: top bar + frame. */
+/** Wave break — centered chip between left/right HUD (no full-width top bar). */
 void drawWaveIntermissionOverlay(float gameT) {
   if (finished || waveState != WAVE_STATE_BREAK) return;
   rectMode(CORNER);
   noStroke();
   float prog = constrain(waveBreakTimer / WAVE_BREAK_DURATION, 0, 1);
-  float edge = 10;
-  fill(42, 28, 16, 220);
-  rect(0, 0, width, edge);
-  rect(0, height - edge, width, edge);
-  rect(0, 0, edge, height);
-  rect(width - edge, 0, edge, height);
-  noFill();
-  stroke(210, 165, 85, 180);
-  strokeWeight(2);
-  rect(edge * 0.5, edge * 0.5, width - edge, height - edge);
-  noStroke();
 
-  float barH = 26;
-  fill(22, 14, 9, 235);
-  rect(0, 0, width, barH);
-  drawHudBar(edge + 4, 6, width - (edge + 8) * 2, barH - 12, prog,
-    color(35, 22, 16), color(100, 175, 240), color(185, 140, 70));
+  final float leftHudW = HUD_LEFT_PANEL_W;
+  final float rightHudW = 198;
+  final float hudPad = 14;
+  float macHudDrop = PApplet.platform == PConstants.MACOS ? 22 : 10;
+  float leftEnd = hudPad + leftHudW + 16;
+  float rightStart = width - hudPad - rightHudW - 16;
+  float chipW = rightStart - leftEnd - 20;
+  float chipH = 36;
+  float chipY = 14 + macHudDrop;
+  if (chipW < 240) {
+    chipW = min(400, width - 56);
+    chipY = 118 + macHudDrop;
+  } else {
+    chipW = constrain(chipW, 260, 440);
+  }
+  float chipX = width * 0.5f - chipW * 0.5f;
 
+  drawWesternPanel(chipX, chipY, chipW, chipH, 8);
+  drawHudBar(chipX + 12, chipY + chipH - 11, chipW - 24, 6, prog,
+    color(35, 22, 16), color(120, 185, 235), color(175, 125, 55));
+
+  textFontBody();
   textAlign(CENTER, CENTER);
   textSize(13);
-  fill(0, 140);
-  text("WAVE BREAK  ·  " + str(max(0, (int)ceil(waveBreakTimer))) + " s  ·  [SPACE] skip",
-    width * 0.5 + 1, barH * 0.52 + 1);
-  fill(255, 235, 200);
-  text("WAVE BREAK  ·  " + str(max(0, (int)ceil(waveBreakTimer))) + " s  ·  [SPACE] skip",
-    width * 0.5, barH * 0.52);
+  String line = "Wave break  ·  " + str(max(0, (int)ceil(waveBreakTimer))) + "s  ·  [SPACE] skip";
+  fill(0, 120);
+  text(line, chipX + chipW * 0.5f + 1, chipY + chipH * 0.42f);
+  fill(255, 238, 205);
+  text(line, chipX + chipW * 0.5f, chipY + chipH * 0.41f);
 }
 
-/** Hit feedback: shock ring + slashes (no full-screen SCREEN — whites out on black). */
+/** Hit feedback: red vignette from screen edges (no full-screen SCREEN blend). */
 void drawHurtFeedbackOverlay() {
   float ring = hurtRing;
   if (ring < 0.02) return;
-  float cx = width * 0.5;
-  float cy = height * 0.5;
-  float dim = min(width, height);
   rectMode(CORNER);
   noStroke();
   blendMode(BLEND);
-  noFill();
-  stroke(255, 248, 235, ring * 220);
-  strokeWeight(2 + ring * 2);
-  float expand = (1 - ring * 0.88) * dim * 0.42;
-  ellipse(cx, cy, expand, expand);
-  stroke(200, 230, 255, ring * 110);
-  strokeWeight(1);
-  ellipse(cx, cy, expand * 0.92, expand * 0.92);
-  noStroke();
-
-  float sp = ring * dim * 0.34;
-  for (int k = 0; k < 8; k++) {
-    float a = k * TWO_PI / 8.0 + frameCount * 0.04;
-    float len = sp * (0.35 + 0.65 * ring);
-    stroke(255, 250, 240, ring * 140);
-    strokeWeight(1.8);
-    line(cx + cos(a) * (sp * 0.12), cy + sin(a) * (sp * 0.12),
-      cx + cos(a) * len, cy + sin(a) * len);
+  float edgeW = max(48, min(width, height) * 0.14f * (0.55f + ring * 0.85f));
+  int steps = 12;
+  for (int i = 0; i < steps; i++) {
+    float t0 = (float)i / steps;
+    float t1 = (float)(i + 1) / steps;
+    int a = (int)(ring * 185 * (1 - (t0 + t1) * 0.5f));
+    if (a < 2) continue;
+    float band = edgeW * (t1 - t0);
+    fill(180, 20, 25, a);
+    rect(0, edgeW * t0, width, band);
+    rect(0, height - edgeW * t1, width, band);
+    rect(edgeW * t0, 0, band, height);
+    rect(width - edgeW * t1, 0, band, height);
   }
-  noStroke();
 }
 
 // === Environment ===
 
+int westernSkyColorAt(float u) {
+  u = constrain(u, 0, 1);
+  if (u < 0.2f) return lerpColor(color(255, 228, 175), color(255, 185, 105), u / 0.2f);
+  if (u < 0.45f) return lerpColor(color(255, 185, 105), color(235, 130, 80), (u - 0.2f) / 0.25f);
+  if (u < 0.68f) return lerpColor(color(235, 130, 80), color(175, 105, 115), (u - 0.45f) / 0.23f);
+  return lerpColor(color(175, 105, 115), color(98, 118, 148), (u - 0.68f) / 0.32f);
+}
+
+void drawWesternSky(float t) {
+  if (player == null) return;
+  hint(DISABLE_DEPTH_TEST);
+  noStroke();
+  pushMatrix();
+  translate(player.pos.x, 0, player.pos.z);
+
+  float skyR = max(arenaHalfW, arenaHalfH) * 2.9f;
+  float horizonY = -22;
+  float zenithY = -1200;
+  int segs = 28;
+  int bands = 9;
+  for (int b = 0; b < bands; b++) {
+    float u0 = b / (float) bands;
+    float u1 = (b + 1) / (float) bands;
+    float y0 = lerp(horizonY, zenithY, u0);
+    float y1 = lerp(horizonY, zenithY, u1);
+    for (int i = 0; i < segs; i++) {
+      float a0 = TWO_PI * i / segs;
+      float a1 = TWO_PI * (i + 1) / segs;
+      beginShape(QUADS);
+      fill(westernSkyColorAt(u0));
+      vertex(cos(a0) * skyR, y0, sin(a0) * skyR);
+      vertex(cos(a1) * skyR, y0, sin(a1) * skyR);
+      fill(westernSkyColorAt(u1));
+      vertex(cos(a1) * skyR, y1, sin(a1) * skyR);
+      vertex(cos(a0) * skyR, y1, sin(a0) * skyR);
+      endShape(CLOSE);
+    }
+  }
+
+  float sunAngle = 0.55f + sin(t * 0.04f) * 0.04f;
+  float sunDist = skyR * 0.78f;
+  float sunX = cos(sunAngle) * sunDist;
+  float sunZ = sin(sunAngle) * sunDist;
+  float sunY = horizonY + 28;
+  fill(255, 160, 70, 35);
+  ellipse(sunX, sunY, 340, 200);
+  fill(255, 195, 95, 70);
+  ellipse(sunX, sunY, 200, 120);
+  fill(255, 225, 155, 200);
+  ellipse(sunX, sunY, 95, 55);
+
+  for (int c = 0; c < 7; c++) {
+    float ca = c * 1.15f + t * 0.015f;
+    float cx = cos(ca) * skyR * (0.35f + noise(c) * 0.25f);
+    float cz = sin(ca) * skyR * (0.35f + noise(c + 3) * 0.25f);
+    float cy = lerp(horizonY, zenithY, 0.42f + noise(c * 0.2) * 0.2f);
+    float cw = 180 + noise(c, t * 0.03f) * 120;
+    float ch = 28 + noise(c + 1) * 18;
+    fill(255, 210, 175, 28 + (int)(noise(c * 0.7) * 22));
+    ellipse(cx, cy, cw, ch);
+    fill(255, 235, 210, 18);
+    ellipse(cx + cw * 0.08f, cy - ch * 0.15f, cw * 0.55f, ch * 0.65f);
+  }
+
+  for (int h = 0; h < 3; h++) {
+    float hy = horizonY + 8 + h * 14;
+    fill(255, 200, 140, 22 - h * 5);
+    beginShape(QUAD_STRIP);
+    for (int i = 0; i <= segs; i++) {
+      float a = TWO_PI * i / segs;
+      float r = skyR * (0.92f - h * 0.04f);
+      vertex(cos(a) * r, hy, sin(a) * r);
+      vertex(cos(a) * r, hy + 35, sin(a) * r);
+    }
+    endShape();
+  }
+
+  hint(ENABLE_DEPTH_TEST);
+  popMatrix();
+  reset3DDrawState();
+}
+
+void drawDistantHorizon(float t) {
+  if (player == null) return;
+  hint(DISABLE_DEPTH_TEST);
+  noStroke();
+  pushMatrix();
+  translate(player.pos.x, 0, player.pos.z);
+  float ringR = max(arenaHalfW, arenaHalfH) * 1.52f;
+
+  fill(118, 78, 52, 200);
+  beginShape(TRIANGLE_FAN);
+  vertex(0, -16, 0);
+  for (int i = 0; i <= 36; i++) {
+    float a = TWO_PI * i / 36;
+    float mesa = noise(i * 0.35, 1.2) > 0.62 ? 1.35f : 1.0f;
+    float h = (28 + noise(i * 0.42, t * 0.04) * 48) * mesa;
+    vertex(cos(a) * ringR, -16 - h, sin(a) * ringR);
+  }
+  endShape(CLOSE);
+
+  fill(88, 55, 38, 210);
+  beginShape(TRIANGLE_FAN);
+  vertex(0, -14, 0);
+  for (int i = 0; i <= 36; i++) {
+    float a = TWO_PI * i / 36 + 0.08f;
+    float h = 14 + noise(i * 0.5 + 20, t * 0.035) * 22;
+    vertex(cos(a) * ringR * 0.94f, -14 - h, sin(a) * ringR * 0.94f);
+  }
+  endShape(CLOSE);
+
+  fill(255, 210, 155, 45);
+  beginShape(QUAD_STRIP);
+  for (int i = 0; i <= 40; i++) {
+    float a = TWO_PI * i / 40;
+    vertex(cos(a) * ringR * 0.98f, -8, sin(a) * ringR * 0.98f);
+    vertex(cos(a) * ringR * 0.98f, 25, sin(a) * ringR * 0.98f);
+  }
+  endShape();
+
+  hint(ENABLE_DEPTH_TEST);
+  popMatrix();
+  reset3DDrawState();
+}
+
 void drawWesternEnvironment(float t) {
   noStroke();
   reset3DDrawState();
+  drawWesternSky(t);
+  drawDistantHorizon(t);
 
   pushMatrix();
   translate(0, 0, 0);
@@ -3197,7 +4092,7 @@ void updateAndDrawEnemyBullets(float dt) {
       float dx = eb.pos.x - player.pos.x;
       float dz = eb.pos.z - player.pos.z;
       if (dx * dx + dz * dz < pr * pr) {
-        player.hp -= 14;
+        player.hp -= eb.dmg;
         eb.alive = false;
         playWavSafe("hit_player.wav");
         for (int k = 0; k < 6; k++) {

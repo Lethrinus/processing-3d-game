@@ -25,11 +25,16 @@ public class SoundHelper {
   }
 
   public static void playWav(String absolutePath, float volume) {
+    float v = clampVol(volume);
+    if (v <= 0.0001f) return;
     try {
       File f = new File(absolutePath);
       if (!f.exists()) return;
-      Clip clip = openClipFromWav(f, clampVol(volume));
-      if (clip != null) clip.start();
+      Clip clip = openClipFromWav(f, v);
+      if (clip != null) {
+        setClipVolume(clip, v);
+        clip.start();
+      }
     } catch (Exception e) { /* yok say */ }
   }
 
@@ -38,15 +43,33 @@ public class SoundHelper {
   }
 
   public static Clip openMusicLoop(String absolutePath, float volume) {
+    float v = clampVol(volume);
+    if (v <= 0.0001f) return null;
     try {
       File f = new File(absolutePath);
       if (!f.exists()) return null;
-      Clip clip = openClipFromWav(f, clampVol(volume));
-      if (clip != null) clip.loop(Clip.LOOP_CONTINUOUSLY);
+      Clip clip = openClipFromWav(f, v);
+      if (clip != null) {
+        setClipVolume(clip, v);
+        clip.loop(Clip.LOOP_CONTINUOUSLY);
+      }
       return clip;
     } catch (Exception e) {
       return null;
     }
+  }
+
+  /** Live volume for a playing clip (settings sliders). */
+  public static void setClipVolume(Clip clip, float volume) {
+    if (clip == null) return;
+    try {
+      if (!clip.isControlSupported(FloatControl.Type.MASTER_GAIN)) return;
+      FloatControl gain = (FloatControl) clip.getControl(FloatControl.Type.MASTER_GAIN);
+      float v = clampVol(volume);
+      float dB = v <= 0.0001f ? gain.getMinimum() : 20f * (float) Math.log10(v);
+      dB = Math.max(gain.getMinimum(), Math.min(gain.getMaximum(), dB));
+      gain.setValue(dB);
+    } catch (Exception e) { /* yok say */ }
   }
 
   public static Thread startMp3Loop(String absolutePath, float volume) {

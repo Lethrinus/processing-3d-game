@@ -2,15 +2,16 @@
 
 class PendingBandit {
   float x, z, spdMul, hpMul;
-  int outfit, wave;
+  int outfit, wave, weaponType;
 
-  PendingBandit(float x, float z, int outfit, float spdMul, float hpMul, int wave) {
+  PendingBandit(float x, float z, int outfit, float spdMul, float hpMul, int wave, int weaponType) {
     this.x = x;
     this.z = z;
     this.outfit = outfit;
     this.spdMul = spdMul;
     this.hpMul = hpMul;
     this.wave = wave;
+    this.weaponType = weaponType;
   }
 }
 
@@ -91,10 +92,33 @@ class Player {
   float knockbackVz = 0;
 
   float stamina = 1;
-  int gold = 0;
+  boolean[] weaponUnlocked = {true, false, false};
 
   Player(float x, float z) {
     pos = new PVector(x, 0, z);
+  }
+
+  boolean isWeaponUnlocked(int slot) {
+    return slot >= 0 && slot < 3 && weaponUnlocked[slot];
+  }
+
+  void resetWeaponsForMode(boolean allUnlocked) {
+    weaponSlot = 0;
+    weaponUnlocked[0] = true;
+    weaponUnlocked[1] = allUnlocked;
+    weaponUnlocked[2] = allUnlocked;
+    wAmmo[0] = wMax[0];
+    wAmmo[1] = allUnlocked ? wMax[1] : 0;
+    wAmmo[2] = allUnlocked ? wMax[2] : 0;
+    reloading = false;
+    reloadTimer = 0;
+  }
+
+  void unlockWeaponSlot(int slot) {
+    if (slot < 0 || slot > 2) return;
+    if (weaponUnlocked[slot]) return;
+    weaponUnlocked[slot] = true;
+    wAmmo[slot] = wMax[slot];
   }
 
   String weaponName() {
@@ -105,21 +129,35 @@ class Player {
 
   void setWeaponSlot(int s) {
     if (finished) return;
-    weaponSlot = constrain(s, 0, 2);
+    s = constrain(s, 0, 2);
+    if (!isWeaponUnlocked(s)) return;
+    weaponSlot = s;
     reloading = false;
     reloadTimer = 0;
   }
 
   void cycleWeapon(int dir) {
     if (finished) return;
-    setWeaponSlot((weaponSlot + dir + 3) % 3);
+    for (int step = 0; step < 3; step++) {
+      int next = (weaponSlot + dir + 3) % 3;
+      if (isWeaponUnlocked(next)) {
+        setWeaponSlot(next);
+        return;
+      }
+      weaponSlot = next;
+    }
   }
 
   void startReload() {
-    if (reloading || wAmmo[weaponSlot] >= wMax[weaponSlot] || finished) return;
+    if (reloading || !isWeaponUnlocked(weaponSlot)) return;
+    if (wAmmo[weaponSlot] >= wMax[weaponSlot] || finished) return;
     reloading = true;
     reloadTimer = wReloadSec[weaponSlot];
-    playWavSafe("reload.wav");
+    if (weaponSlot == 1) {
+      playSoundSafe("shotgun-reload-sfx.wav", "gun_reload.wav", "reload.wav");
+    } else {
+      playWavSafe("reload.wav");
+    }
   }
 
   void updateReload(float dt) {
@@ -160,6 +198,7 @@ class Player {
   ArrayList<Bullet> tryShootVolley(PVector aim) {
     ArrayList<Bullet> list = new ArrayList<Bullet>();
     if (reloading || finished || waveState != WAVE_STATE_FIGHT) return list;
+    if (!isWeaponUnlocked(weaponSlot)) return list;
     if (wAmmo[weaponSlot] <= 0) return list;
     int now = millis();
     if ((now - lastShotMs) / 1000.0 < wCooldown[weaponSlot]) return list;
@@ -185,7 +224,11 @@ class Player {
     } else {
       list.add(new Bullet(tip, PVector.mult(dir, 1060), 30, Bullet.KIND_REVOLVER));
     }
-    playWavSafe("gun_player.wav");
+    if (weaponSlot == 1) {
+      playSoundSafe("shotgun-firing.wav", "gun_player.wav");
+    } else {
+      playWavSafe("gun_player.wav");
+    }
     return list;
   }
 
@@ -412,6 +455,7 @@ class Bandit {
   int lastShotMs = -9999;
   float walkPhase = 0;
   int waveIndex = 1;
+  int weaponType = BANDIT_WPN_REVOLVER;
   float recoilKick = 0;
   float stuckSec = 0;
   float lastMoveDist = 0;
@@ -419,7 +463,7 @@ class Bandit {
   int pathStep = 0;
   float pathRefresh = 0;
 
-  Bandit(float x, float z, int outfit, float speedMul, float hpMul, int wave) {
+  Bandit(float x, float z, int outfit, float speedMul, float hpMul, int wave, int weaponType) {
     pos = new PVector(x, 0, z);
     this.outfit = outfit;
     this.speed = speedMul;
@@ -427,10 +471,14 @@ class Bandit {
     this.maxHp = 100 * hpMul;
     this.hp = maxHp;
     this.waveIndex = wave;
+    this.weaponType = weaponType;
   }
 
   float shootIntervalSec() {
-    return max(0.28, 1.15 - max(1, currentWave) * 0.12);
+    float base = max(0.34, 1.24 - max(1, currentWave) * 0.095);
+    if (weaponType == BANDIT_WPN_REPEATER) return base * 0.55f;
+    if (weaponType == BANDIT_WPN_SHOTGUN) return base * 1.35f;
+    return base;
   }
 
   void update(Player player, float t, float dt) {
@@ -511,8 +559,8 @@ class Bandit {
 
     if (dist < 56) {
       int now = millis();
-      if (now - lastDamageMs > 600) {
-        player.hp -= 8;
+      if (now - lastDamageMs > 680) {
+        player.hp -= 6;
         lastDamageMs = now;
         playWavSafe("hit_player.wav");
       }
@@ -522,23 +570,35 @@ class Bandit {
       int now = millis();
       if (now - lastShotMs > shootIntervalSec() * 1000) {
         lastShotMs = now;
-        recoilKick = 0.95;
-        float yaw = atan2(player.pos.x - pos.x, player.pos.z - pos.z);
-        float rk = recoilKick;
-        float lx = 5, ly = -49, lz = 52 - rk * 9;
-        float c = cos(yaw), s = sin(yaw);
-        PVector tip = new PVector(pos.x + lx * c + lz * s, ly + rk * 2, pos.z - lx * s + lz * c);
-        PVector dir = PVector.sub(player.pos, tip);
-        dir.y = 0;
-        if (dir.magSq() > 4) {
-          dir.normalize();
-          enemyBullets.add(new EnemyBullet(tip, PVector.mult(dir, 520)));
-          playWavSafe("gun_enemy.wav");
-        }
+        recoilKick = weaponType == BANDIT_WPN_SHOTGUN ? 1.15f : 0.95f;
+        fireAtPlayer(player);
       }
     }
 
     hitFlashSec = max(0, hitFlashSec - dt);
+  }
+
+  void fireAtPlayer(Player player) {
+    float yaw = atan2(player.pos.x - pos.x, player.pos.z - pos.z);
+    float rk = recoilKick;
+    float lx = 5, ly = -49, lz = 52 - rk * 9;
+    float c = cos(yaw), s = sin(yaw);
+    PVector tip = new PVector(pos.x + lx * c + lz * s, ly + rk * 2, pos.z - lx * s + lz * c);
+    PVector dir = PVector.sub(player.pos, tip);
+    dir.y = 0;
+    if (dir.magSq() < 4) return;
+    dir.normalize();
+    if (weaponType == BANDIT_WPN_SHOTGUN) {
+      for (int i = -2; i <= 2; i++) {
+        PVector d = rotateDirXZ(dir, i * 0.11f);
+        enemyBullets.add(new EnemyBullet(tip, PVector.mult(d, 420), 6));
+      }
+    } else if (weaponType == BANDIT_WPN_REPEATER) {
+      enemyBullets.add(new EnemyBullet(tip, PVector.mult(dir, 620), 8));
+    } else {
+      enemyBullets.add(new EnemyBullet(tip, PVector.mult(dir, 520), 11));
+    }
+    playWavSafe("gun_enemy.wav");
   }
 
   /** @return true if this hit killed the bandit (loot is spawned from main sketch). */
@@ -692,16 +752,7 @@ class Bandit {
     box(7, 17, 7);
     popMatrix();
 
-    pushMatrix();
-    translate(5, -49, 44);
-    rotateX(rk * 0.5 + swing * 0.1);
-    rotateZ(rk * 0.09);
-    translate(0, rk * 3.5, -rk * 14);
-    fill(42);
-    box(4, 4, 30);
-    fill(48);
-    box(5, 4, 26);
-    popMatrix();
+    drawBanditWeaponModel(rk, swing);
 
     if (fa > 0.03) {
       pushMatrix();
@@ -714,6 +765,29 @@ class Bandit {
       emissive(0, 0, 0);
       popMatrix();
     }
+  }
+
+  void drawBanditWeaponModel(float rk, float swing) {
+    pushMatrix();
+    translate(5, -49, 44);
+    rotateX(rk * 0.5 + swing * 0.1);
+    rotateZ(rk * 0.09);
+    translate(0, rk * 3.5, -rk * 14);
+    fill(42);
+    if (weaponType == BANDIT_WPN_SHOTGUN) {
+      box(6, 5, 18);
+      fill(48);
+      box(7, 4, 16);
+    } else if (weaponType == BANDIT_WPN_REPEATER) {
+      box(3, 3, 38);
+      fill(48);
+      box(4, 3, 34);
+    } else {
+      box(4, 4, 30);
+      fill(48);
+      box(5, 4, 26);
+    }
+    popMatrix();
   }
 
   void drawBanditHatStyle(int style, float t, float walkPhase, float phase, float bob) {
@@ -764,6 +838,9 @@ class Bandit {
 }
 
 class LootPickup {
+  static final int LOOT_HEALTH = 0;
+  static final int LOOT_AMMO = 1;
+
   float x, z;
   int kind;
   boolean gone = false;
@@ -782,26 +859,23 @@ class LootPickup {
     float dz = p.pos.z - z;
     if (dx * dx + dz * dz < 36 * 36) {
       gone = true;
-      if (kind != 2) {
-        spawnPickupPlusBurst(screenX(x, -70, z), screenY(x, -70, z), kind);
-      }
-      if (kind == 0) {
-        int g = 18 + (int)random(14);
-        p.gold += g;
-        score += g / 2;
-      } else if (kind == 1) {
+      spawnPickupPlusBurst(screenX(x, -70, z), screenY(x, -70, z), kind);
+      if (kind == LOOT_HEALTH) {
         p.hp = min(p.maxHp, p.hp + 28);
       } else {
         int sum = 0;
         for (int i = 0; i < 3; i++) {
+          if (!p.isWeaponUnlocked(i)) continue;
           int add = (i == 1 ? 3 : 8);
           int before = p.wAmmo[i];
           p.wAmmo[i] = min(p.wMax[i], p.wAmmo[i] + add);
           sum += p.wAmmo[i] - before;
         }
-        float psx = screenX(x, -52, z);
-        float psy = screenY(x, -52, z);
-        spawnAmmoGainFloat(psx, psy, sum);
+        if (sum > 0) {
+          float psx = screenX(x, -52, z);
+          float psy = screenY(x, -52, z);
+          spawnAmmoGainFloat(psx, psy, sum);
+        }
       }
       playPickupSound();
     }
@@ -809,29 +883,46 @@ class LootPickup {
 
   void display(float t) {
     if (gone) return;
-    float bob = sin(t * 5 + spin) * 4;
+    float bob = sin(t * 5 + spin) * 5;
+    float pulse = 0.85 + 0.15 * sin(t * 7 + spin);
     pushMatrix();
     translate(x, -18 + bob, z);
     rotateY(t * 1.2 + spin);
     noStroke();
-    if (kind == 0) {
-      fill(230, 200, 80);
-      box(14, 6, 10);
-      fill(255, 230, 120);
-      translate(0, -5, 0);
-      box(10, 4, 8);
-    } else if (kind == 1) {
-      fill(200, 60, 55);
-      drawCylinder(6, 16, 10);
-      fill(255, 90, 85);
-      translate(0, -12, 0);
-      sphere(5);
+    if (kind == LOOT_HEALTH) {
+      emissive(80, 12, 12);
+      fill(200, 45, 42, (int)(220 * pulse));
+      drawCylinder(9 * pulse, 4, 12);
+      fill(255, 70, 65);
+      translate(0, -10, 0);
+      box(3, 14, 3);
+      translate(0, 7, 0);
+      box(14, 3, 3);
+      emissive(0, 0, 0);
+      fill(255, 120, 115, 90);
+      translate(0, -2, 0);
+      sphere(6 * pulse);
     } else {
-      fill(60, 55, 50);
-      box(16, 10, 12);
-      fill(90, 85, 40);
-      translate(0, 2, 0);
-      box(12, 6, 8);
+      fill(72, 48, 28);
+      box(18, 12, 14);
+      fill(95, 78, 42);
+      translate(0, 7, 0);
+      box(16, 3, 12);
+      fill(120, 115, 105);
+      translate(0, -2, 7);
+      box(14, 2, 2);
+      fill(180, 175, 160);
+      for (int i = -2; i <= 2; i++) {
+        pushMatrix();
+        translate(i * 3.2f, 10, 0);
+        drawCylinder(1.4f, 5, 6);
+        popMatrix();
+      }
+      emissive(60, 55, 30);
+      fill(255, 230, 120, (int)(100 * pulse));
+      translate(0, 14, 0);
+      sphere(4);
+      emissive(0, 0, 0);
     }
     popMatrix();
   }
@@ -923,12 +1014,19 @@ class EnemyBullet {
   boolean alive = true;
   float life = 2.2;
   float spin = 0;
+  float dmg = 14;
 
   EnemyBullet(PVector start, PVector velocity) {
+    this(start, velocity, 14);
+  }
+
+  EnemyBullet(PVector start, PVector velocity, float dmg) {
     pos = start.copy();
     prevPos = start.copy();
     vel = velocity.copy();
+    this.dmg = dmg;
     spin = random(TWO_PI);
+    if (dmg <= 9) life = 1.6f;
   }
 
   void update(float dt) {
