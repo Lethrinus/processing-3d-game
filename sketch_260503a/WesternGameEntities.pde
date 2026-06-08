@@ -320,7 +320,7 @@ class Player {
 
   void display(float t) {
     pushMatrix();
-    translate(pos.x, 0, pos.z);
+    translate(pos.x, CHARACTER_GROUND_OFFSET, pos.z);
     rotateY(facing);
     noStroke();
 
@@ -638,7 +638,7 @@ class Bandit {
     if (!alive) return;
 
     pushMatrix();
-    translate(pos.x, 0, pos.z);
+    translate(pos.x, CHARACTER_GROUND_OFFSET, pos.z);
     float bob = sin(t * 8.0 + phase) * 2.2;
     translate(0, bob, 0);
     rotateY(atan2(player.pos.x - pos.x, player.pos.z - pos.z));
@@ -973,36 +973,34 @@ class Bullet {
     translate(pos.x, pos.y, pos.z);
     float yaw = atan2(vel.x, vel.z);
 
+    stroke(255, 0, 0);
     if (kind == KIND_SHOTGUN) {
-      stroke(255, 170, 70, 170);
       strokeWeight(2);
       line(0, 0, 0,
         -(pos.x - prevPos.x), -(pos.y - prevPos.y), -(pos.z - prevPos.z));
       noStroke();
-      fill(255, 190, 90);
+      fill(255, 0, 0);
       sphere(2.8f);
-      fill(255, 140, 50, 90);
+      fill(200, 0, 0);
       sphere(5);
     } else if (kind == KIND_REPEATER) {
-      stroke(220, 245, 255, 190);
       strokeWeight(2);
       line(0, 0, 0,
         -(pos.x - prevPos.x), -(pos.y - prevPos.y), -(pos.z - prevPos.z));
       noStroke();
       rotateY(yaw);
-      fill(200, 235, 255);
+      fill(255, 0, 0);
       box(2, 2, 11);
-      fill(255, 255, 255, 120);
+      fill(220, 0, 0);
       sphere(3);
     } else {
-      stroke(255, 235, 130, 200);
       strokeWeight(3);
       line(0, 0, 0,
         -(pos.x - prevPos.x), -(pos.y - prevPos.y), -(pos.z - prevPos.z));
       noStroke();
-      fill(255, 230, 120);
+      fill(255, 0, 0);
       sphere(4);
-      fill(255, 200, 60, 100);
+      fill(200, 0, 0);
       sphere(8);
     }
     popMatrix();
@@ -1050,11 +1048,11 @@ class EnemyBullet {
     float horiz = sqrt(fwd.x * fwd.x + fwd.z * fwd.z);
     float pitch = atan2(-fwd.y, max(0.001, horiz));
 
-    stroke(40, 28, 18, 110);
-    strokeWeight(4);
+    stroke(200, 0, 0);
+    strokeWeight(5);
     line(prevPos.x, prevPos.y, prevPos.z, pos.x, pos.y, pos.z);
-    stroke(255, 210, 140, 200);
-    strokeWeight(2);
+    stroke(255, 0, 0);
+    strokeWeight(3);
     line(prevPos.x, prevPos.y, prevPos.z, pos.x, pos.y, pos.z);
     noStroke();
 
@@ -1064,32 +1062,20 @@ class EnemyBullet {
     rotateX(pitch);
     rotateZ(sin(spin) * 0.08);
 
-    blendMode(BLEND);
-    emissive(255, 190, 110);
-    fill(255, 210, 130, 95);
+    emissive(255, 0, 0);
+    fill(200, 0, 0);
     pushMatrix();
-    scale(2.2, 2.2, 1);
+    scale(2.4, 2.4, 1);
     sphere(5);
     popMatrix();
-    fill(255, 235, 200, 75);
+    fill(255, 0, 0);
     pushMatrix();
-    scale(1.4, 1.4, 3.6);
+    scale(1.5, 1.5, 4.2);
+    sphere(3);
+    popMatrix();
+    translate(0, 0, 10);
     sphere(3.2);
-    popMatrix();
     emissive(0, 0, 0);
-
-    fill(95, 55, 32, 235);
-    pushMatrix();
-    scale(0.85, 0.85, 4.2);
-    sphere(2.4);
-    popMatrix();
-
-    fill(255, 215, 150, 255);
-    translate(0, 0, 9);
-    sphere(2.1);
-    fill(255, 250, 230, 220);
-    translate(0, 0, 2.2);
-    sphere(1.15);
 
     popMatrix();
   }

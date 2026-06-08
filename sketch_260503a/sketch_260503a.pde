@@ -170,7 +170,12 @@ int[] pathDirDx = {1, -1, 0, 0, 1, 1, -1, -1};
 int[] pathDirDz = {0, 0, 1, -1, 1, -1, 1, -1};
 float[] pathDirCost = {1, 1, 1, 1, 1.414f, 1.414f, 1.414f, 1.414f};
 
-PImage texBarrel, texRoof, texGround, texCactus;
+PImage texBarrel, texRoof, texGround, texCactus, texSky;
+PImage texBuildingWood, texBuildingRoof;
+PImage texWood1, texWood2, texWood3, texFence;
+/** Cubemap faces: 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z (OpenGL / Poly Haven order). */
+PImage[] skyCubemap = new PImage[6];
+boolean skyCubemapReady;
 /** Optional UI sprites in data/ui/ — game draws text buttons if missing. */
 PImage uiBtnControls, uiBtnControlsHot;
 /** Controls overlay — key/mouse icons in data/controls/ (or data/ui/controls/). */
@@ -246,8 +251,15 @@ boolean moveW, moveA, moveS, moveD;
 boolean shooting = false;
 
 float camYaw = -PI / 6.0;
-float camPitch = 1.05;
+/** Lower pitch = less top-down “floating platform” look (was 1.05). */
+float camPitch = 0.82f;
 float camDist = 720;
+/** World Y of walkable floor (Processing: +Y is down). */
+final float GROUND_Y = 0;
+/** Character meshes are authored with feet ~1 unit below their root; pull root up so feet sit on GROUND_Y. */
+final float CHARACTER_GROUND_OFFSET = -1f;
+/** Cubemap face images: UV height where the horizon line sits (0=top, 1=bottom of face). */
+final float SKYBOX_HORIZON_UV = 0.54f;
 float camDistMin = 360;
 float camDistMax = 1750;
 
@@ -368,6 +380,97 @@ void loadTextureAssets() {
   if (texGround == null) texGround = makeNoiseGroundTexture();
 
   texCactus = tryLoadImage("textures/cactus.png");
+
+  texWood1 = tryLoadImage("textures/wood1.jpg");
+  if (texWood1 == null) texWood1 = tryLoadImage("textures/wood1.png");
+  texWood2 = tryLoadImage("textures/wood2.jpg");
+  if (texWood2 == null) texWood2 = tryLoadImage("textures/wood2.png");
+  texWood3 = tryLoadImage("textures/wood3.jpg");
+  if (texWood3 == null) texWood3 = tryLoadImage("textures/wood3.png");
+  texFence = tryLoadImage("textures/fence.jpg");
+  if (texFence == null) texFence = tryLoadImage("textures/fence.png");
+
+  texBuildingWood = tryLoadImage("textures/building_wood.jpg");
+  if (texBuildingWood == null) texBuildingWood = tryLoadImage("textures/building_wood.png");
+  if (texBuildingWood == null) texBuildingWood = texWood1;
+
+  texBuildingRoof = tryLoadImage("textures/building_roof.jpg");
+  if (texBuildingRoof == null) texBuildingRoof = tryLoadImage("textures/building_roof.png");
+  if (texBuildingRoof == null) texBuildingRoof = texRoof;
+
+  texSky = tryLoadImage("textures/sky_horizon.jpg");
+  if (texSky == null) texSky = tryLoadImage("textures/sky_horizon.png");
+  if (texSky == null) texSky = tryLoadImage("textures/sky_panorama.jpg");
+  if (texSky == null) texSky = tryLoadImage("textures/sky_panorama.png");
+  if (texSky == null) texSky = tryLoadImage("textures/sky_stars.png");
+
+  loadSkyCubemapAssets();
+}
+
+void loadSkyCubemapAssets() {
+  skyCubemapReady = false;
+  for (int i = 0; i < 6; i++) skyCubemap[i] = null;
+
+  String[][] faceNames = {
+    {"px", "posx"},
+    {"nx", "negx"},
+    {"py", "posy"},
+    {"ny", "negy"},
+    {"pz", "posz"},
+    {"nz", "negz"}
+  };
+  boolean separateOk = true;
+  for (int i = 0; i < 6; i++) {
+    for (int j = 0; j < faceNames[i].length; j++) {
+      skyCubemap[i] = tryLoadImage("textures/sky_cubemap/" + faceNames[i][j] + ".jpg");
+      if (skyCubemap[i] == null) {
+        skyCubemap[i] = tryLoadImage("textures/sky_cubemap/" + faceNames[i][j] + ".png");
+      }
+      if (skyCubemap[i] != null) break;
+    }
+    if (skyCubemap[i] == null) separateOk = false;
+  }
+  if (separateOk) {
+    skyCubemapReady = true;
+    return;
+  }
+  for (int i = 0; i < 6; i++) skyCubemap[i] = null;
+
+  PImage cross = tryLoadImage("textures/sky_cubemap/cubemap.png");
+  if (cross == null) cross = tryLoadImage("textures/sky_cubemap/sky_cubemap.png");
+  if (cross == null) cross = tryLoadImage("textures/sky_cubemap.png");
+  if (cross != null) skyCubemapReady = loadCubemapFromCrossLayout(cross);
+}
+
+/**
+ * Horizontal-cross cubemap sheet (4 wide x 3 tall):
+ *       [ny]
+ * [nx]  [pz]  [px]  [nz]
+ *       [py]
+ */
+boolean loadCubemapFromCrossLayout(PImage cross) {
+  int face = cross.width / 4;
+  if (face < 2 || face * 3 != cross.height) return false;
+
+  int[][] colsRows = {
+    {2, 1}, // 0 +X px
+    {0, 1}, // 1 -X nx
+    {1, 2}, // 2 +Y py (down)
+    {1, 0}, // 3 -Y ny (up)
+    {1, 1}, // 4 +Z pz (front)
+    {3, 1}  // 5 -Z nz (back)
+  };
+  for (int i = 0; i < 6; i++) {
+    int col = colsRows[i][0];
+    int row = colsRows[i][1];
+    skyCubemap[i] = cross.get(col * face, row * face, face, face);
+    if (skyCubemap[i] == null) return false;
+  }
+  return true;
+}
+
+boolean hasCustomSky() {
+  return skyCubemapReady || texSky != null;
 }
 
 void loadUiAssets() {
@@ -1315,7 +1418,7 @@ void beginPlaySession() {
   shooting = false;
 }
 
-/** Reset fill/tint so 2D HUD colors do not tint the next frame's textured ground. */
+/** Reset fill/tint so 2D HUD colors do not tint the next frame's 3D draws. */
 void reset3DDrawState() {
   blendMode(BLEND);
   noTint();
@@ -1328,6 +1431,7 @@ void reset3DDrawState() {
 void reset2DDrawState() {
   blendMode(BLEND);
   noTint();
+  noTexture();
   fill(255);
   stroke(255);
   noStroke();
@@ -1795,13 +1899,14 @@ void drawSecondScreen(float t) {
     for (BloodParticle bp : bloodParticles) bp.display();
   }
 
-  playerScreenFootX = screenX(player.pos.x, 14, player.pos.z);
-  playerScreenFootY = screenY(player.pos.x, 14, player.pos.z);
+  playerScreenFootX = screenX(player.pos.x, GROUND_Y, player.pos.z);
+  playerScreenFootY = screenY(player.pos.x, GROUND_Y, player.pos.z);
   playerSprintHudX = screenX(player.pos.x, -86, player.pos.z);
   playerSprintHudY = screenY(player.pos.x, -86, player.pos.z);
   rebuildSprintTrailScreen(t);
 
   hint(DISABLE_DEPTH_TEST);
+  noTexture();
   camera();
   perspective();
   noLights();
@@ -2189,7 +2294,7 @@ void setAngledCamera() {
   camPosY = -vertDist;
   camPosZ = player.pos.z + horizDist * cos(camYaw);
   camTargetX = player.pos.x;
-  camTargetY = -30;
+  camTargetY = -8;
   camTargetZ = player.pos.z;
   float shX = (random(-1, 1) + random(-1, 1)) * 0.5f * (camShakePx + hurtShakePx * 0.75f);
   float shY = (random(-1, 1) + random(-1, 1)) * 0.5f * (camShakePx * 0.55f + hurtShakePx * 0.45f);
@@ -2224,7 +2329,7 @@ PVector groundFromMouse(float mx, float my) {
   rayDir.add(PVector.mult(camUp, ndcY));
   rayDir.normalize();
 
-  float planeY = 0;
+  float planeY = GROUND_Y;
   if (abs(rayDir.y) < 1e-5) return new PVector(player.pos.x, planeY, player.pos.z);
   float t = (planeY - camPosY) / rayDir.y;
   if (t < 0) t = 1500;
@@ -2330,7 +2435,7 @@ void mouseDragged() {
     float dy = mouseY - pmouseY;
     camYaw -= dx * 0.008;
     camPitch -= dy * 0.005;
-    camPitch = constrain(camPitch, 0.45, 1.30);
+    camPitch = constrain(camPitch, 0.45, 1.12);
   }
 }
 
@@ -3188,6 +3293,151 @@ void drawHurtFeedbackOverlay() {
 
 // === Environment ===
 
+float getSkyRadius() {
+  return max(arenaHalfW, arenaHalfH) * 2.9f;
+}
+
+/**
+ * Arena floor — Processing P3D ground recipe: translate + rotateX(HALF_PI) + textureMode(IMAGE).
+ * Direct XZ quads were back-face culled (flat background color, no texture).
+ */
+void drawTexturedGroundPlane(float cx, float cz, float w, float h, float y, int tilesX, int tilesZ) {
+  if (texGround == null) return;
+
+  pushMatrix();
+  translate(cx, y, cz);
+  rotateX(HALF_PI);
+
+  float hw = w * 0.5f;
+  float hh = h * 0.5f;
+  float tileW = w / tilesX;
+  float tileH = h / tilesZ;
+  int tw = texGround.width;
+  int th = texGround.height;
+
+  noStroke();
+  noTint();
+  fill(255);
+  emissive(0, 0, 0);
+  textureMode(IMAGE);
+
+  for (int ix = 0; ix < tilesX; ix++) {
+    for (int iz = 0; iz < tilesZ; iz++) {
+      float x0 = -hw + ix * tileW;
+      float x1 = x0 + tileW;
+      float y0 = -hh + iz * tileH;
+      float y1 = y0 + tileH;
+      beginShape(QUADS);
+      texture(texGround);
+      vertex(x0, y0, 0, 0, 0);
+      vertex(x1, y0, 0, tw, 0);
+      vertex(x1, y1, 0, tw, th);
+      vertex(x0, y1, 0, 0, th);
+      endShape();
+    }
+  }
+
+  noTexture();
+  textureMode(NORMAL);
+  popMatrix();
+}
+
+/**
+ * Inward-facing cubemap face. Side walls end at GROUND_Y so skybox “dirt” does not
+ * sit below the arena floor (fixes floating-platform look).
+ */
+void drawSkyboxFace(PImage tex, float s, int face) {
+  if (tex == null || face == 2) return;
+  int w = tex.width;
+  int h = tex.height;
+  float vH = h * SKYBOX_HORIZON_UV;
+  float gY = GROUND_Y;
+  beginShape(QUADS);
+  texture(tex);
+  textureMode(IMAGE);
+  switch (face) {
+    case 0: // +X right
+      vertex( s, -s,  s, 0, 0);
+      vertex( s, -s, -s, w, 0);
+      vertex( s, gY, -s, w, vH);
+      vertex( s, gY,  s, 0, vH);
+      break;
+    case 1: // -X left
+      vertex(-s, -s, -s, 0, 0);
+      vertex(-s, -s,  s, w, 0);
+      vertex(-s, gY,  s, w, vH);
+      vertex(-s, gY, -s, 0, vH);
+      break;
+    case 2: // +Y down — skip (arena ground is the floor)
+      break;
+    case 3: // -Y up (zenith)
+      vertex(-s, -s,  s, 0, 0);
+      vertex(-s, -s, -s, w, 0);
+      vertex( s, -s, -s, w, h);
+      vertex( s, -s,  s, 0, h);
+      break;
+    case 4: // +Z
+      vertex(-s, -s,  s, 0, 0);
+      vertex( s, -s,  s, w, 0);
+      vertex( s, gY,  s, w, vH);
+      vertex(-s, gY,  s, 0, vH);
+      break;
+    case 5: // -Z
+      vertex( s, -s, -s, 0, 0);
+      vertex(-s, -s, -s, w, 0);
+      vertex(-s, gY, -s, w, vH);
+      vertex( s, gY, -s, 0, vH);
+      break;
+  }
+  endShape();
+}
+
+/** Skybox centered on player — textures/sky_cubemap/ (6 files or one cross PNG). */
+void drawSkyCubemap(float halfSize) {
+  float s = halfSize;
+  fill(255);
+  emissive(0, 0, 0);
+  drawSkyboxFace(skyCubemap[3], s, 3);
+  for (int f = 0; f < 6; f++) {
+    if (f == 2 || f == 3) continue;
+    drawSkyboxFace(skyCubemap[f], s, f);
+  }
+  noTexture();
+  textureMode(NORMAL);
+}
+
+/** Sky dome around the arena — panorama wraps horizontally; image top = zenith, bottom = horizon. */
+void drawTexturedSkyCylinder(PImage tex, float radius, float yBot, float yTop, int segs, int bands) {
+  textureMode(IMAGE);
+  int tw = tex.width;
+  int th = tex.height;
+  fill(255);
+  emissive(0, 0, 0);
+  for (int b = 0; b < bands; b++) {
+    float f0 = (float) b / bands;
+    float f1 = (float) (b + 1) / bands;
+    float y0 = lerp(yBot, yTop, f0);
+    float y1 = lerp(yBot, yTop, f1);
+    float imgV0 = lerp(th, 0, f0);
+    float imgV1 = lerp(th, 0, f1);
+    for (int i = 0; i < segs; i++) {
+      float a0 = TWO_PI * i / segs;
+      float a1 = TWO_PI * (i + 1) / segs;
+      float imgU0 = (float) i / segs * tw;
+      float imgU1 = (float) (i + 1) / segs * tw;
+      beginShape(QUADS);
+      texture(tex);
+      vertex(cos(a0) * radius, y0, sin(a0) * radius, imgU0, imgV0);
+      vertex(cos(a1) * radius, y0, sin(a1) * radius, imgU1, imgV0);
+      vertex(cos(a1) * radius, y1, sin(a1) * radius, imgU1, imgV1);
+      vertex(cos(a0) * radius, y1, sin(a0) * radius, imgU0, imgV1);
+      endShape();
+    }
+  }
+  noTexture();
+  textureMode(NORMAL);
+}
+
 int westernSkyColorAt(float u) {
   u = constrain(u, 0, 1);
   if (u < 0.2f) return lerpColor(color(255, 228, 175), color(255, 185, 105), u / 0.2f);
@@ -3203,9 +3453,25 @@ void drawWesternSky(float t) {
   pushMatrix();
   translate(player.pos.x, 0, player.pos.z);
 
-  float skyR = max(arenaHalfW, arenaHalfH) * 2.9f;
+  float skyR = getSkyRadius();
   float horizonY = -22;
   float zenithY = -1200;
+
+  if (skyCubemapReady) {
+    drawSkyCubemap(skyR);
+    hint(ENABLE_DEPTH_TEST);
+    popMatrix();
+    reset3DDrawState();
+    return;
+  }
+  if (texSky != null) {
+    drawTexturedSkyCylinder(texSky, skyR, horizonY, zenithY, 36, 10);
+    hint(ENABLE_DEPTH_TEST);
+    popMatrix();
+    reset3DDrawState();
+    return;
+  }
+
   int segs = 28;
   int bands = 9;
   for (int b = 0; b < bands; b++) {
@@ -3272,6 +3538,7 @@ void drawWesternSky(float t) {
 
 void drawDistantHorizon(float t) {
   if (player == null) return;
+  if (hasCustomSky()) return;
   hint(DISABLE_DEPTH_TEST);
   noStroke();
   pushMatrix();
@@ -3319,45 +3586,11 @@ void drawWesternEnvironment(float t) {
   drawWesternSky(t);
   drawDistantHorizon(t);
 
-  pushMatrix();
-  translate(0, 0, 0);
-  rotateX(HALF_PI);
-  rectMode(CENTER);
-  float extW = arenaHalfW * 2.4;
-  float extH = arenaHalfH * 2.2;
-  if (texGround != null) {
-    textureMode(NORMAL);
-    beginShape(QUADS);
-    texture(texGround);
-    float rep = 10;
-    vertex(-extW / 2, -extH / 2, 0, 0, 0);
-    vertex( extW / 2, -extH / 2, 0, rep, 0);
-    vertex( extW / 2,  extH / 2, 0, rep, rep);
-    vertex(-extW / 2,  extH / 2, 0, 0, rep);
-    endShape();
-  } else {
-    fill(166, 123, 74);
-    rect(0, 0, extW, extH);
-  }
-  popMatrix();
-
-  pushMatrix();
-  translate(0, -0.5, 0);
-  rotateX(HALF_PI);
-  fill(140, 95, 56);
-  rectMode(CENTER);
-  rect(0, 0, worldX(240), arenaHalfH * 1.8);
-  popMatrix();
-
-  pushMatrix();
-  translate(0, -1.0, 0);
-  rotateX(HALF_PI);
-  fill(110, 70, 40);
-  rectMode(CENTER);
-  for (int i = -8; i <= 8; i++) {
-    rect(0, i * worldZ(70), worldX(240), 4);
-  }
-  popMatrix();
+  float skyR = getSkyRadius();
+  float maxPlayerDist = sqrt(arenaHalfW * arenaHalfW + arenaHalfH * arenaHalfH);
+  float groundHalf = maxPlayerDist + skyR * 1.08f;
+  int groundTiles = max(14, (int)(groundHalf / 260f));
+  drawTexturedGroundPlane(0, 0, groundHalf * 2f, groundHalf * 2f, GROUND_Y, groundTiles, groundTiles);
 
   drawAmbientLife(t);
   drawMapAmbience(t);
@@ -3365,7 +3598,7 @@ void drawWesternEnvironment(float t) {
   drawSaloon(worldX(-560), worldZ(-220), t);
   drawSheriffOffice(worldX(560), worldZ(-190));
   drawBarn(worldX(-540), worldZ(250));
-  drawWaterTower(worldX(520), worldZ(250), t);
+  drawWaterTower(worldX(520), worldZ(250));
   drawWagon(worldX(-150), worldZ(60));
   drawTrainCar(worldX(720), worldZ(30));
 
@@ -3394,6 +3627,9 @@ void drawWesternEnvironment(float t) {
     drawFencePost(-arenaHalfW - worldX(50), z);
     drawFencePost(arenaHalfW + worldX(50), z);
   }
+
+  noTexture();
+  textureMode(NORMAL);
 }
 
 /** Dust, brush shadow, rolling tumbleweed. */
@@ -3519,20 +3755,19 @@ void drawRockCluster(float x, float z, float t, float scl) {
 }
 
 void drawSaloon(float x, float z, float t) {
+  PImage wood = pickWoodTexture(x, z);
   pushMatrix();
   translate(x, 0, z);
   noStroke();
 
   pushMatrix();
   translate(0, -46, 0);
-  fill(132, 89, 55);
-  box(260, 92, 190);
+  drawBuildingWallBox(260, 92, 190, 132, 89, 55, wood);
   popMatrix();
 
   pushMatrix();
   translate(0, -100, 0);
-  fill(95, 60, 35);
-  box(280, 16, 200);
+  drawBuildingRoofBox(280, 16, 200, 95, 60, 35);
   popMatrix();
 
   pushMatrix();
@@ -3580,20 +3815,19 @@ void drawSaloon(float x, float z, float t) {
 }
 
 void drawSheriffOffice(float x, float z) {
+  PImage wood = pickWoodTexture(x, z);
   pushMatrix();
   translate(x, 0, z);
   noStroke();
 
   pushMatrix();
   translate(0, -44, 0);
-  fill(119, 83, 49);
-  box(220, 88, 170);
+  drawBuildingWallBox(220, 88, 170, 119, 83, 49, wood);
   popMatrix();
 
   pushMatrix();
   translate(0, -94, 0);
-  fill(98, 66, 43);
-  box(238, 18, 186);
+  drawBuildingRoofBox(238, 18, 186, 98, 66, 43);
   popMatrix();
 
   pushMatrix();
@@ -3620,40 +3854,41 @@ void drawSheriffOffice(float x, float z) {
 }
 
 void drawBarn(float x, float z) {
+  PImage wood = pickWoodTexture(x, z);
   pushMatrix();
   translate(x, 0, z);
   noStroke();
 
   pushMatrix();
   translate(0, -45, 0);
-  fill(125, 50, 40);
-  box(250, 90, 170);
+  drawBuildingWallBox(250, 90, 170, 125, 50, 40, wood);
   popMatrix();
 
   pushMatrix();
   translate(0, -90, 0);
-  fill(82, 38, 30);
-  beginShape(QUADS);
-  vertex(-130, 0, -90);
-  vertex(0, -55, -90);
-  vertex(0, -55, 90);
-  vertex(-130, 0, 90);
-
-  vertex(0, -55, -90);
-  vertex(130, 0, -90);
-  vertex(130, 0, 90);
-  vertex(0, -55, 90);
-  endShape();
-
-  beginShape(TRIANGLES);
-  vertex(-130, 0, 90);
-  vertex(0, -55, 90);
-  vertex(130, 0, 90);
-
-  vertex(-130, 0, -90);
-  vertex(130, 0, -90);
-  vertex(0, -55, -90);
-  endShape();
+  if (texBuildingRoof != null || wood != null) {
+    drawTexturedBarnRoof(130, 55, 90, texBuildingRoof, wood);
+  } else {
+    fill(82, 38, 30);
+    beginShape(QUADS);
+    vertex(-130, 0, -90);
+    vertex(0, -55, -90);
+    vertex(0, -55, 90);
+    vertex(-130, 0, 90);
+    vertex(0, -55, -90);
+    vertex(130, 0, -90);
+    vertex(130, 0, 90);
+    vertex(0, -55, 90);
+    endShape();
+    beginShape(TRIANGLES);
+    vertex(-130, 0, 90);
+    vertex(0, -55, 90);
+    vertex(130, 0, 90);
+    vertex(-130, 0, -90);
+    vertex(130, 0, -90);
+    vertex(0, -55, -90);
+    endShape();
+  }
   popMatrix();
 
   pushMatrix();
@@ -3665,7 +3900,7 @@ void drawBarn(float x, float z) {
   popMatrix();
 }
 
-void drawWaterTower(float x, float z, float t) {
+void drawWaterTower(float x, float z) {
   pushMatrix();
   translate(x, 0, z);
   noStroke();
@@ -3688,19 +3923,6 @@ void drawWaterTower(float x, float z, float t) {
     fill(146, 104, 73);
     drawCylinder(56, 70, 24);
   }
-
-  pushMatrix();
-  translate(0, -168, 0);
-  rotateY(t * 1.4);
-  fill(90, 62, 40, 200);
-  for (int b = 0; b < 4; b++) {
-    pushMatrix();
-    rotateY(b * HALF_PI);
-    translate(0, 0, 38);
-    box(4, 28, 2);
-    popMatrix();
-  }
-  popMatrix();
 
   fill(80, 50, 30);
   for (int i = -1; i <= 1; i++) {
@@ -3795,20 +4017,19 @@ void drawWagon(float x, float z) {
 }
 
 void drawTrainCar(float x, float z) {
+  PImage wood = pickWoodTexture(x, z);
   pushMatrix();
   translate(x, 0, z);
   noStroke();
 
   pushMatrix();
   translate(0, -55, 0);
-  fill(60, 30, 30);
-  box(220, 60, 90);
+  drawBuildingWallBox(220, 60, 90, 60, 30, 30, wood);
   popMatrix();
 
   pushMatrix();
   translate(0, -95, 0);
-  fill(40, 22, 22);
-  box(232, 12, 96);
+  drawBuildingRoofBox(232, 12, 96, 40, 22, 22);
   popMatrix();
 
   for (int sx = -1; sx <= 1; sx += 2) {
@@ -3839,7 +4060,8 @@ void drawCactus(float x, float z) {
 
   pushMatrix();
   translate(0, -94, 0);
-  sphere(12);
+  if (useTex) drawTexturedSphere(texCactus, 12, 14);
+  else sphere(12);
   popMatrix();
 
   pushMatrix();
@@ -3855,7 +4077,8 @@ void drawCactus(float x, float z) {
   popMatrix();
   pushMatrix();
   translate(-30, -77, 0);
-  sphere(7);
+  if (useTex) drawTexturedSphere(texCactus, 7, 12);
+  else sphere(7);
   popMatrix();
 
   pushMatrix();
@@ -3871,7 +4094,8 @@ void drawCactus(float x, float z) {
   popMatrix();
   pushMatrix();
   translate(26, -63, 0);
-  sphere(6);
+  if (useTex) drawTexturedSphere(texCactus, 6, 12);
+  else sphere(6);
   popMatrix();
 
   if (useTex) noTint();
@@ -3903,8 +4127,13 @@ void drawBarrel(float x, float z) {
 void drawFencePost(float x, float z) {
   pushMatrix();
   translate(x, -35, z);
-  fill(118, 82, 54);
-  drawCylinder(7, 70, 10);
+  if (texFence != null) {
+    fill(255);
+    drawTexturedCylinder(texFence, 7, 70, 12, false);
+  } else {
+    fill(118, 82, 54);
+    drawCylinder(7, 70, 10);
+  }
   translate(0, -38, 0);
   if (texRoof != null) {
     drawTexturedCone(texRoof, 9, 14, 12);
@@ -3916,6 +4145,126 @@ void drawFencePost(float x, float z) {
 }
 
 // === Geometry helpers ===
+
+final float BUILDING_TEX_TILE = 96f;
+
+/** Stable per-building wood variant from world position (does not flicker each frame). */
+PImage pickWoodTexture(float worldX, float worldZ) {
+  PImage[] opts = {texWood1, texWood2, texWood3};
+  int n = 0;
+  for (int i = 0; i < opts.length; i++) {
+    if (opts[i] != null) n++;
+  }
+  if (n == 0) {
+    if (texBuildingWood != null) return texBuildingWood;
+    return texBarrel;
+  }
+  int pick = abs((int)(worldX * 12.9898f + worldZ * 78.233f)) % n;
+  int seen = 0;
+  for (int i = 0; i < opts.length; i++) {
+    if (opts[i] == null) continue;
+    if (seen == pick) return opts[i];
+    seen++;
+  }
+  return texWood1;
+}
+
+void drawTexQuad(PImage tex, float x0, float y0, float z0, float u0, float v0,
+    float x1, float y1, float z1, float u1, float v1,
+    float x2, float y2, float z2, float u2, float v2,
+    float x3, float y3, float z3, float u3, float v3) {
+  beginShape(QUADS);
+  texture(tex);
+  textureMode(NORMAL);
+  textureWrap(REPEAT);
+  vertex(x0, y0, z0, u0, v0);
+  vertex(x1, y1, z1, u1, v1);
+  vertex(x2, y2, z2, u2, v2);
+  vertex(x3, y3, z3, u3, v3);
+  endShape();
+}
+
+/** Box walls (4 sides) + optional top — same layout as box(w,h,d) centered at origin. */
+void drawTexturedBuildingBox(float w, float h, float d, PImage wallTex, PImage roofTex, boolean roofTop) {
+  if (wallTex == null) return;
+  float hw = w * 0.5f;
+  float hh = h * 0.5f;
+  float hd = d * 0.5f;
+  float uW = w / BUILDING_TEX_TILE;
+  float vH = h / BUILDING_TEX_TILE;
+  float uD = d / BUILDING_TEX_TILE;
+  noStroke();
+  noTint();
+  fill(255);
+
+  drawTexQuad(wallTex,
+    -hw, -hh, hd, 0, 0,  hw, -hh, hd, uW, 0,  hw, hh, hd, uW, vH,  -hw, hh, hd, 0, vH);
+  drawTexQuad(wallTex,
+    hw, -hh, -hd, 0, 0,  -hw, -hh, -hd, uW, 0,  -hw, hh, -hd, uW, vH,  hw, hh, -hd, 0, vH);
+  drawTexQuad(wallTex,
+    hw, -hh, hd, 0, 0,  hw, -hh, -hd, uD, 0,  hw, hh, -hd, uD, vH,  hw, hh, hd, 0, vH);
+  drawTexQuad(wallTex,
+    -hw, -hh, -hd, 0, 0,  -hw, -hh, hd, uD, 0,  -hw, hh, hd, uD, vH,  -hw, hh, -hd, 0, vH);
+
+  if (roofTop) {
+    PImage topTex = roofTex != null ? roofTex : wallTex;
+    drawTexQuad(topTex,
+      -hw, -hh, -hd, 0, 0,  hw, -hh, -hd, uW, 0,  hw, -hh, hd, uW, uD,  -hw, -hh, hd, 0, uD);
+  }
+  noTexture();
+  textureMode(NORMAL);
+}
+
+void drawBuildingWallBox(float w, float h, float d, int r, int g, int b, PImage woodTex) {
+  if (woodTex != null) {
+    drawTexturedBuildingBox(w, h, d, woodTex, null, false);
+  } else {
+    fill(r, g, b);
+    box(w, h, d);
+  }
+}
+
+void drawBuildingRoofBox(float w, float h, float d, int r, int g, int b) {
+  if (texBuildingRoof != null || texBuildingWood != null) {
+    drawTexturedBuildingBox(w, h, d, texBuildingRoof != null ? texBuildingRoof : texBuildingWood,
+      texBuildingRoof, true);
+  } else {
+    fill(r, g, b);
+    box(w, h, d);
+  }
+}
+
+/** Barn gable roof — two slopes + front/back triangles. */
+void drawTexturedBarnRoof(float halfW, float peakDrop, float halfD, PImage roofTex, PImage gableTex) {
+  if (roofTex == null) return;
+  float slopeLen = sqrt(halfW * halfW + peakDrop * peakDrop);
+  float uSlope = slopeLen / BUILDING_TEX_TILE;
+  float vD = (halfD * 2f) / BUILDING_TEX_TILE;
+  noStroke();
+  noTint();
+  fill(255);
+
+  drawTexQuad(roofTex,
+    -halfW, 0, -halfD, 0, 0,  0, -peakDrop, -halfD, uSlope, 0,
+    0, -peakDrop, halfD, uSlope, vD,  -halfW, 0, halfD, 0, vD);
+  drawTexQuad(roofTex,
+    0, -peakDrop, -halfD, 0, 0,  halfW, 0, -halfD, uSlope, 0,
+    halfW, 0, halfD, uSlope, vD,  0, -peakDrop, halfD, 0, vD);
+
+  PImage gt = gableTex != null ? gableTex : roofTex;
+  beginShape(TRIANGLES);
+  texture(gt);
+  textureMode(NORMAL);
+  vertex(-halfW, 0, halfD, 0, 0);
+  vertex(0, -peakDrop, halfD, 0.5, 1);
+  vertex(halfW, 0, halfD, 1, 0);
+  vertex(-halfW, 0, -halfD, 0, 0);
+  vertex(halfW, 0, -halfD, 1, 0);
+  vertex(0, -peakDrop, -halfD, 0.5, 1);
+  endShape();
+  noTexture();
+  textureMode(NORMAL);
+}
 
 /** Cylinder body — texture on side faces (UV). */
 void drawTexturedCylinder(PImage tex, float radius, float h, int detail, boolean withCaps) {
@@ -3954,6 +4303,41 @@ void drawTexturedCylinder(PImage tex, float radius, float h, int detail, boolean
     }
     endShape();
   }
+  noTexture();
+}
+
+/** Sphere with lat/long UV wrap (cactus tips). Inherits fill() from caller like drawTexturedCylinder. */
+void drawTexturedSphere(PImage tex, float radius, int detail) {
+  if (tex == null) {
+    sphere(radius);
+    return;
+  }
+  textureMode(NORMAL);
+  noStroke();
+  for (int lat = 0; lat < detail; lat++) {
+    float lat0 = PI * (-0.5f + (float) lat / detail);
+    float lat1 = PI * (-0.5f + (float) (lat + 1) / detail);
+    float y0 = sin(lat0) * radius;
+    float y1 = sin(lat1) * radius;
+    float r0 = cos(lat0) * radius;
+    float r1 = cos(lat1) * radius;
+    beginShape(QUAD_STRIP);
+    texture(tex);
+    for (int lon = 0; lon <= detail; lon++) {
+      float lonAngle = TWO_PI * lon / detail;
+      float x0 = cos(lonAngle) * r0;
+      float z0 = sin(lonAngle) * r0;
+      float x1 = cos(lonAngle) * r1;
+      float z1 = sin(lonAngle) * r1;
+      float u = (float) lon / detail;
+      float v0 = (float) lat / detail;
+      float v1 = (float) (lat + 1) / detail;
+      vertex(x0, y0, z0, u, v0);
+      vertex(x1, y1, z1, u, v1);
+    }
+    endShape();
+  }
+  noTexture();
 }
 
 /** Cone roof / fence post cap — texture mapping. */
@@ -3977,6 +4361,7 @@ void drawTexturedCone(PImage tex, float radius, float h, int detail) {
     vertex(cos(a1) * radius, half, sin(a1) * radius, u1, 1);
     endShape();
   }
+  noTexture();
 }
 
 void drawCone(float radius, float h, int detail) {
