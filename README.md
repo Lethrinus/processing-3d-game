@@ -22,7 +22,7 @@ Survive wave after wave of bandits in a dusty frontier town. Manage ammo, grab l
 
 Fullscreen vs windowed is read from `data/progression.txt` on launch. Toggle in **Settings** from the title screen.
 
-Full controls and win/lose rules → `[GAME_RULES.md](GAME_RULES.md)`
+Full controls and win/lose rules → [GAME_RULES.md](GAME_RULES.md)
 
 ---
 
@@ -133,7 +133,8 @@ processing-3d-game/
     └── data/                     … textures, sounds, fonts, UI
 ```
 
-Asset checklist → `[sketch_260503a/data/ASSET_LIST.md](sketch_260503a/data/ASSET_LIST.md)`
+- [Asset checklist](sketch_260503a/data/ASSET_LIST.md)
+- [Assets readme](sketch_260503a/data/ASSETS_README.txt)
 
 ---
 
@@ -158,4 +159,4 @@ Asset checklist → `[sketch_260503a/data/ASSET_LIST.md](sketch_260503a/data/ASS
 
 ## License
 
-MIT — see `[LICENSE](LICENSE)`.
+MIT — see [LICENSE](LICENSE).
