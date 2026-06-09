@@ -5,7 +5,6 @@ import java.io.*;
 public class SoundHelper {
   public static float sfxVolume = 0.22f;
   public static float musicVolume = 0.16f;
-  public static volatile boolean musicLoopStop = false;
 
   static float clampVol(float v) {
     return Math.max(0f, Math.min(1f, v));
@@ -35,7 +34,7 @@ public class SoundHelper {
         setClipVolume(clip, v);
         clip.start();
       }
-    } catch (Exception e) { /* yok say */ }
+    } catch (Exception e) { /* ignore */ }
   }
 
   public static Clip openMusicLoop(String absolutePath) {
@@ -69,17 +68,7 @@ public class SoundHelper {
       float dB = v <= 0.0001f ? gain.getMinimum() : 20f * (float) Math.log10(v);
       dB = Math.max(gain.getMinimum(), Math.min(gain.getMaximum(), dB));
       gain.setValue(dB);
-    } catch (Exception e) { /* yok say */ }
-  }
-
-  public static Thread startMp3Loop(String absolutePath, float volume) {
-    musicLoopStop = false;
-    openMusicLoop(absolutePath, volume);
-    return null;
-  }
-
-  public static Thread startMp3Loop(String absolutePath) {
-    return startMp3Loop(absolutePath, musicVolume);
+    } catch (Exception e) { /* ignore */ }
   }
 
   static Clip openClipFromWav(File f, float volume) throws Exception {
@@ -161,10 +150,6 @@ public class SoundHelper {
         clip.stop();
         clip.close();
       }
-    } catch (Exception e) { /* yok say */ }
-  }
-
-  public static void stopMusicLoop() {
-    musicLoopStop = true;
+    } catch (Exception e) { /* ignore */ }
   }
 }
