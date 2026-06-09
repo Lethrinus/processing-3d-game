@@ -8,6 +8,10 @@ Survive wave after wave of bandits in a dusty frontier town. Manage ammo, grab l
 > *Yavuzhan Özbek - 2201927*  
 > Ozan Halis Demiralp - 2203046
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="In-game screenshot" width="820"/>
+</p>
+
 ---
 
 ## Quick start
