@@ -429,6 +429,21 @@ class GameSession {
     audio.startMenuMusic();
   }
 
+  void quitToTitle() {
+    if (!ctx.finished) {
+      ctx.finished = true;
+      ctx.gameStateText = "QUIT";
+    }
+    persistRunIfEnded();
+    ctx.gamePaused = false;
+    ctx.showControlsOverlay = false;
+    ctx.shooting = false;
+    saveProgression();
+    audio.stopMusic();
+    ctx.gameFlow = FLOW_TITLE;
+    audio.startMenuMusic();
+  }
+
   void setGamePaused(boolean paused) {
     if (paused == ctx.gamePaused) return;
     updatePauseClock();

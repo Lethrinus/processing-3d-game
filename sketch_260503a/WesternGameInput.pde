@@ -12,6 +12,10 @@ class InputHandler {
   }
 
   void onKeyPressed(boolean shiftDown) {
+    if ((p.key == 'q' || p.key == 'Q') && ctx.gameFlow == FLOW_PLAY) {
+      session.quitToTitle();
+      return;
+    }
     if (ctx.gameFlow == FLOW_PLAY && !ctx.finished) {
       if (p.key == ESC || p.keyCode == ESC) {
         p.key = 0;
@@ -50,11 +54,6 @@ class InputHandler {
     if (p.key == 'a' || p.key == 'A') ctx.moveA = true;
     if (p.key == 's' || p.key == 'S') ctx.moveS = true;
     if (p.key == 'd' || p.key == 'D') ctx.moveD = true;
-    if (p.key == 'q' || p.key == 'Q') {
-      ctx.finished = true;
-      ctx.gameStateText = "QUIT";
-      session.audio.stopMusic();
-    }
     if (p.key == 'r' || p.key == 'R') {
       if (ctx.finished) session.beginPlaySession();
       else if (ctx.gameFlow == FLOW_PLAY && !ctx.showControlsOverlay && !ctx.gamePaused) {

@@ -47,11 +47,11 @@ class UIRenderer {
 
   void drawMenuExtras(float centerX) {
     p.textSize(MENU_SCORE_SIZE);
-    p.fill(220, 195, 140);
+    p.fill(255);
     p.text("High score: " + ctx.progressionHighScore, centerX, p.height * 0.52f);
     p.textSize(MENU_CREDITS_SIZE);
-    p.fill(160, 130, 90);
-    p.text("Yavuzhan · SEN3301 2025–26", centerX, p.height * 0.88f);
+    p.fill(255);
+    p.text("Yavuzhan Özbek · Ozan Halis Demiralp", centerX, p.height * 0.88f);
     float blink = map(sin(p.millis() * CLICK_BLINK_SPEED), -1, 1, CLICK_ALPHA_MIN, CLICK_ALPHA_MAX);
     p.textSize(MENU_CLICK_SIZE);
     p.fill(255, 248, 220, blink);
